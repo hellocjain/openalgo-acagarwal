@@ -196,6 +196,7 @@ update_env() {
 }
 
 update_env "BROKER" "acagarwal"
+update_env "REDIRECT_URL" "http://127.0.0.1:5001/acagarwal/callback"
 update_env "BROKER_API_KEY" "$API_KEY"
 update_env "BROKER_API_SECRET" "$API_SECRET"
 update_env "BROKER_API_KEY_MARKET" "$API_KEY_MARKET"
