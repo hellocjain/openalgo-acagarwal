@@ -161,9 +161,9 @@ def broker_callback(broker, para=None):
             aliceblue_login_url = f"https://ant.aliceblueonline.com/?appcode={appcode}"
             return redirect(aliceblue_login_url)
 
-    elif broker == "fivepaisaxts":
-        code = "fivepaisaxts"
-        logger.debug(f"FivePaisaXTS broker - code: {code}")
+    elif broker in ["fivepaisaxts", "acagarwal"]:
+        code = broker
+        logger.debug(f"{broker} broker - code: {code}")
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -1003,7 +1003,7 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney", "iiflcapital"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney", "iiflcapital", "fivepaisaxts", "acagarwal"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database

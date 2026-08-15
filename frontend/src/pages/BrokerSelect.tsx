@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/authStore'
 
 // All supported brokers with their display names and auth types
 const allBrokers = [
+  { id: 'acagarwal', name: 'AC Agarwal', authType: 'totp' },
   { id: 'fivepaisa', name: '5 Paisa', authType: 'totp' },
   { id: 'fivepaisaxts', name: '5 Paisa (XTS)', authType: 'totp' },
   { id: 'aliceblue', name: 'Alice Blue', authType: 'totp' },
@@ -131,6 +132,7 @@ export default function BrokerSelect() {
 
     // Build login URL based on broker type (matching original broker.html logic)
     switch (selectedBroker) {
+      case 'acagarwal':
       case 'fivepaisa':
       case 'fivepaisaxts':
       case 'aliceblue':

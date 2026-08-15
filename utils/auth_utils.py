@@ -457,7 +457,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
                 }
             ), 200
         else:
-            return redirect(url_for("dashboard_bp.dashboard"))
+            return redirect("/dashboard")
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")
         if is_ajax_request():

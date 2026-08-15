@@ -91,7 +91,7 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # updates onto the market-data socket instead is not viable either: that adapter
 # runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
 # the OrderUpdateEvent would be published on the wrong process's event bus.
-_POLLING_BROKERS = {"groww", "fivepaisa", "samco"}
+_POLLING_BROKERS = {"groww", "fivepaisa", "samco", "fivepaisaxts", "acagarwal"}
 
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}
