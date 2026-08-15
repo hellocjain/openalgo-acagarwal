@@ -196,6 +196,7 @@ update_env() {
 }
 
 update_env "BROKER" "acagarwal"
+update_env "VALID_BROKERS" "acagarwal,fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,dhan,dhan_sandbox,definedge,deltaexchange,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 update_env "REDIRECT_URL" "http://127.0.0.1:5001/acagarwal/callback"
 update_env "BROKER_API_KEY" "$API_KEY"
 update_env "BROKER_API_SECRET" "$API_SECRET"
