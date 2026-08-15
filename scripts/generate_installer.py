@@ -114,7 +114,7 @@ echo -e "${GREEN}[+] Installing Python dependencies...${NC}"
 if [ -f "requirements.txt" ]; then
   ./venv/bin/pip install -r requirements.txt
 fi
-./venv/bin/pip install httpx python-socketio websocket-client pandas python-dotenv
+./venv/bin/pip install httpx python-socketio websocket-client pandas python-dotenv eventlet gunicorn
 
 # ------------------------------------------------------------------------------
 # Step 4: Extract Embedded AC Agarwal Plugin Payload
