@@ -166,9 +166,9 @@ def api_websocket_market_data():
 def api_get_websocket_apikey():
     """Get API key for WebSocket authentication"""
     from database.auth_db import (
-        create_api_key,
         get_api_key_for_tradingview,
         get_first_available_api_key,
+        upsert_api_key,
     )
 
     username = get_username_from_session()
@@ -177,10 +177,10 @@ def api_get_websocket_apikey():
     ) or get_first_available_api_key()
 
     if not api_key:
-        import secrets
-        new_key = f"oa_{secrets.token_hex(16)}"
-        created_key, _ = create_api_key(username or "admin", new_key)
-        api_key = created_key or new_key
+        from blueprints.apikey import generate_api_key
+        new_key = generate_api_key()
+        upsert_api_key(username or "admin", new_key)
+        api_key = new_key
 
     return jsonify({"status": "success", "api_key": api_key}), 200
 
