@@ -24,7 +24,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///db/openalgo.db"
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
