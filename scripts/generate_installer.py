@@ -52,7 +52,6 @@ fi
 # ------------------------------------------------------------------------------
 echo -e "\\n${CYAN}--- Step 1: AC Agarwal Credentials Configuration ---${NC}"
 
-# Read existing .env values if present
 if [ -f ".env" ]; then
   eval $(grep -E "^(BROKER_USER_ID|BROKER_API_KEY|BROKER_API_SECRET|BROKER_API_KEY_MARKET|BROKER_API_SECRET_MARKET|BROKER_BASE_URL)=" .env 2>/dev/null | xargs) || true
 fi
@@ -174,8 +173,10 @@ except Exception as e:
 # ------------------------------------------------------------------------------
 echo -e "\\n${CYAN}--- Step 6: Updating .env Configuration & Security Tokens ---${NC}"
 
-if [ ! -f ".env" ]; then
-  if [ -f ".env.example" ]; then
+if [ ! -f ".env" ] || ! grep -q "^ENV_CONFIG_VERSION=" .env; then
+  if [ -f ".sample.env" ]; then
+    cp .sample.env .env
+  elif [ -f ".env.example" ]; then
     cp .env.example .env
   else
     touch .env
@@ -185,10 +186,12 @@ fi
 update_env() {
   key="$1"
   val="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i "s|^${key}=.*|${key}=${val}|" .env
+  if grep -q "^${key}\\\\s*=" .env; then
+    sed -i "s|^${key}\\\\s*=.*|${key} = '${val}'|" .env
+  elif grep -q "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key} = '${val}'|" .env
   else
-    echo "${key}=${val}" >> .env
+    echo "${key} = '${val}'" >> .env
   fi
 }
 
@@ -202,19 +205,14 @@ update_env "BROKER_BASE_URL" "$BASE_URL"
 update_env "HOST" "0.0.0.0"
 update_env "PORT" "5001"
 
-# Generate mandatory OpenAlgo v2.0 security tokens if absent or default
-if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "^API_KEY_PEPPER=$" .env; then
+# Generate mandatory OpenAlgo v2.0 security tokens if absent or default placeholder
+if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "OPENALGO_PLACEHOLDER" .env; then
   GEN_PEPPER=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
-  update_env "API_KEY_PEPPER" "$GEN_PEPPER"
-fi
-
-if ! grep -q "^FERNET_SALT=" .env || grep -q "^FERNET_SALT=$" .env; then
   GEN_SALT=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
-  update_env "FERNET_SALT" "$GEN_SALT"
-fi
-
-if ! grep -q "^SECRET_KEY=" .env || grep -q "^SECRET_KEY=$" .env; then
   GEN_SECRET=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
+  
+  update_env "API_KEY_PEPPER" "$GEN_PEPPER"
+  update_env "FERNET_SALT" "$GEN_SALT"
   update_env "SECRET_KEY" "$GEN_SECRET"
   update_env "APP_KEY" "$GEN_SECRET"
 fi
