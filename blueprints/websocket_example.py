@@ -165,26 +165,21 @@ def api_websocket_market_data():
 @websocket_bp.route("/api/websocket/apikey", methods=["GET"])
 def api_get_websocket_apikey():
     """Get API key for WebSocket authentication"""
-    username = get_username_from_session()
-    if not username:
-        return jsonify(
-            {"status": "error", "message": "Session not found - please refresh page"}
-        ), 401
-
     from database.auth_db import (
         create_api_key,
         get_api_key_for_tradingview,
         get_first_available_api_key,
     )
 
-    api_key = get_api_key_for_tradingview(username)
-    if not api_key:
-        api_key = get_first_available_api_key()
+    username = get_username_from_session()
+    api_key = (
+        get_api_key_for_tradingview(username) if username else None
+    ) or get_first_available_api_key()
 
     if not api_key:
         import secrets
         new_key = f"oa_{secrets.token_hex(16)}"
-        created_key, _ = create_api_key(username, new_key)
+        created_key, _ = create_api_key(username or "admin", new_key)
         api_key = created_key or new_key
 
     return jsonify({"status": "success", "api_key": api_key}), 200
