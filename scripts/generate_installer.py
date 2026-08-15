@@ -197,15 +197,18 @@ update_env() {
 
 update_env "BROKER" "acagarwal"
 update_env "VALID_BROKERS" "acagarwal,fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,dhan,dhan_sandbox,definedge,deltaexchange,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
-update_env "REDIRECT_URL" "http://127.0.0.1:5001/acagarwal/callback"
 update_env "BROKER_API_KEY" "$API_KEY"
 update_env "BROKER_API_SECRET" "$API_SECRET"
 update_env "BROKER_API_KEY_MARKET" "$API_KEY_MARKET"
 update_env "BROKER_API_SECRET_MARKET" "$API_SECRET_MARKET"
 update_env "BROKER_USER_ID" "$USER_ID"
 update_env "BROKER_BASE_URL" "$BASE_URL"
+update_env "FLASK_HOST_IP" "0.0.0.0"
 update_env "HOST" "0.0.0.0"
+update_env "FLASK_PORT" "5001"
 update_env "PORT" "5001"
+update_env "REDIRECT_URL" "http://168.144.22.51:5001/acagarwal/callback"
+update_env "HOST_SERVER" "http://168.144.22.51:5001"
 
 # Generate mandatory OpenAlgo v2.0 security tokens if absent or default placeholder
 if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "OPENALGO_PLACEHOLDER" .env; then
