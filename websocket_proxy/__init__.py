@@ -43,7 +43,6 @@ from broker.fivepaisa.streaming.fivepaisa_adapter import FivepaisaWebSocketAdapt
 
 # Import the fivepaisaxts_adapter
 from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter
-from broker.acagarwal.streaming.acagarwal_adapter import ACAgarwalWebSocketAdapter
 
 # Import the flattrade_adapter
 from broker.flattrade.streaming.flattrade_adapter import FlattradeWebSocketAdapter
@@ -119,7 +118,6 @@ from broker.hdfcsecurities.streaming.hdfcsecurities_adapter import (
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
-register_adapter("acagarwal", ACAgarwalWebSocketAdapter)
 register_adapter("angel", AngelWebSocketAdapter)
 register_adapter("zerodha", ZerodhaWebSocketAdapter)
 register_adapter("dhan", DhanWebSocketAdapter)

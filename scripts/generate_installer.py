@@ -112,21 +112,8 @@ echo -e "\\n${CYAN}--- Step 5: Patching Core OpenAlgo Platform Registrations ---
 import re, sys
 
 # 1. Patch websocket_proxy/__init__.py
-try:
-    with open('websocket_proxy/__init__.py', 'r') as f:
-        content = f.read()
-    if 'ACAgarwalWebSocketAdapter' not in content:
-        import_line = 'from broker.acagarwal.streaming.acagarwal_adapter import ACAgarwalWebSocketAdapter\\n'
-        content = content.replace('from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter', 'from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter\\n' + import_line)
-        reg_line = 'register_adapter(\"acagarwal\", ACAgarwalWebSocketAdapter)\\n'
-        content = content.replace('register_adapter(\"fivepaisaxts\", FivepaisaXTSWebSocketAdapter)', 'register_adapter(\"fivepaisaxts\", FivepaisaXTSWebSocketAdapter)\\n' + reg_line)
-        with open('websocket_proxy/__init__.py', 'w') as f:
-            f.write(content)
-        print('  [✓] Patched websocket_proxy/__init__.py')
-    else:
-        print('  [✓] websocket_proxy/__init__.py already registered')
-except Exception as e:
-    print(f'  [!] websocket_proxy patch notice: {e}')
+# 1. websocket_proxy uses dynamic adapter loading via broker_factory.py
+print('  [✓] websocket_proxy configured with dynamic adapter loader')
 
 # 2. Patch services/order_update_service.py
 try:
