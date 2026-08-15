@@ -92,14 +92,45 @@ class BrokerData:
         try:
             client = get_httpx_client()
             token = get_token(symbol, exchange)
-            xts_interval = self.timeframe_map.get(interval, "1DAY")
+
+            if not token:
+                logger.warning(f"[AC Agarwal] Could not find token for {exchange}:{symbol}")
+                return pd.DataFrame()
+
+            segment_map = {
+                "NSE": "NSECM",
+                "BSE": "BSECM",
+                "NFO": "NSEFO",
+                "BFO": "BSEFO",
+                "CDS": "NSECD",
+                "MCX": "MCXFO",
+            }
+            exchange_segment = segment_map.get(exchange, "NSECM")
+
+            compression_map = {
+                "1m": "60",
+                "2m": "120",
+                "3m": "180",
+                "5m": "300",
+                "10m": "600",
+                "15m": "900",
+                "30m": "1800",
+                "60m": "3600",
+                "D": "D",
+            }
+            compression_value = compression_map.get(interval, "300")
+
+            start_dt = pd.to_datetime(start_date)
+            end_dt = pd.to_datetime(end_date)
+            from_str = start_dt.strftime("%b %d %Y 000000")
+            to_str = end_dt.strftime("%b %d %Y 235959")
 
             params = {
-                "exchangeSegment": map_exchange_code(exchange),
+                "exchangeSegment": exchange_segment,
                 "exchangeInstrumentID": token,
-                "startTime": start_date,
-                "endTime": end_date,
-                "compressionType": xts_interval,
+                "startTime": from_str,
+                "endTime": to_str,
+                "compressionValue": compression_value,
             }
 
             url = f"{MARKET_DATA_URL}/instruments/ohlc"
@@ -107,10 +138,30 @@ class BrokerData:
 
             if response.status_code == 200:
                 res = response.json()
-                if res.get("type") == "success" and "data" in res.get("result", {}):
-                    raw_data = res["result"]["data"]
-                    df = pd.DataFrame(raw_data)
-                    return df
+                if res.get("type") == "success":
+                    result = res.get("result", {})
+                    raw_data = result.get("dataReponse") or result.get("dataResponse") or result.get("data", "")
+                    if isinstance(raw_data, str) and raw_data.strip():
+                        rows = raw_data.strip().split(",")
+                        parsed_bars = []
+                        for row in rows:
+                            fields = row.split("|")
+                            if len(fields) >= 6:
+                                try:
+                                    parsed_bars.append({
+                                        "timestamp": int(fields[0]),
+                                        "open": float(fields[1]),
+                                        "high": float(fields[2]),
+                                        "low": float(fields[3]),
+                                        "close": float(fields[4]),
+                                        "volume": int(fields[5]),
+                                    })
+                                except (ValueError, IndexError):
+                                    continue
+                        if parsed_bars:
+                            return pd.DataFrame(parsed_bars)
+                    elif isinstance(raw_data, list) and len(raw_data) > 0:
+                        return pd.DataFrame(raw_data)
 
             return pd.DataFrame()
         except Exception as e:
