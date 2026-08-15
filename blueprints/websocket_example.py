@@ -188,12 +188,6 @@ def api_get_websocket_apikey():
 @websocket_bp.route("/api/websocket/config", methods=["GET"])
 def api_get_websocket_config():
     """Get WebSocket configuration including URL"""
-    username = get_username_from_session()
-    if not username:
-        return jsonify(
-            {"status": "error", "message": "Session not found - please refresh page"}
-        ), 401
-
     import os
     from flask import request
 
