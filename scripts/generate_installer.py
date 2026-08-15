@@ -48,16 +48,42 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Step 1: Interactive Credential Setup
+# Step 1: Credential Setup (Interactive or Non-Interactive Fallback)
 # ------------------------------------------------------------------------------
 echo -e "\\n${CYAN}--- Step 1: AC Agarwal Credentials Configuration ---${NC}"
-read -p "Enter AC Agarwal User ID (Client Code, e.g. DM933): " USER_ID
-read -p "Enter Interactive API Key (BROKER_API_KEY): " API_KEY
-read -p "Enter Interactive API Secret (BROKER_API_SECRET): " API_SECRET
-read -p "Enter Market Data API Key (BROKER_API_KEY_MARKET): " API_KEY_MARKET
-read -p "Enter Market Data API Secret (BROKER_API_SECRET_MARKET): " API_SECRET_MARKET
-read -p "Enter AC Agarwal Base URL [default: https://symphony.acagarwal.com:3000]: " BASE_URL
+
+# Read existing .env values if present
+if [ -f ".env" ]; then
+  eval $(grep -E "^(BROKER_USER_ID|BROKER_API_KEY|BROKER_API_SECRET|BROKER_API_KEY_MARKET|BROKER_API_SECRET_MARKET|BROKER_BASE_URL)=" .env 2>/dev/null | xargs) || true
+fi
+
+USER_ID="${USER_ID:-$BROKER_USER_ID}"
+API_KEY="${API_KEY:-$BROKER_API_KEY}"
+API_SECRET="${API_SECRET:-$BROKER_API_SECRET}"
+API_KEY_MARKET="${API_KEY_MARKET:-$BROKER_API_KEY_MARKET}"
+API_SECRET_MARKET="${API_SECRET_MARKET:-$BROKER_API_SECRET_MARKET}"
+BASE_URL="${BASE_URL:-$BROKER_BASE_URL}"
 BASE_URL=${BASE_URL:-https://symphony.acagarwal.com:3000}
+
+if [ -z "$USER_ID" ]; then
+  read -p "Enter AC Agarwal User ID (Client Code, e.g. DM933): " USER_ID
+fi
+
+if [ -z "$API_KEY" ]; then
+  read -p "Enter Interactive API Key (BROKER_API_KEY): " API_KEY
+fi
+
+if [ -z "$API_SECRET" ]; then
+  read -p "Enter Interactive API Secret (BROKER_API_SECRET): " API_SECRET
+fi
+
+if [ -z "$API_KEY_MARKET" ]; then
+  read -p "Enter Market Data API Key (BROKER_API_KEY_MARKET): " API_KEY_MARKET
+fi
+
+if [ -z "$API_SECRET_MARKET" ]; then
+  read -p "Enter Market Data API Secret (BROKER_API_SECRET_MARKET): " API_SECRET_MARKET
+fi
 
 # ------------------------------------------------------------------------------
 # Step 2: Install Ubuntu Packages
@@ -111,7 +137,6 @@ echo -e "\\n${CYAN}--- Step 5: Patching Core OpenAlgo Platform Registrations ---
 ./venv/bin/python3 -c "
 import re, sys
 
-# 1. Patch websocket_proxy/__init__.py
 # 1. websocket_proxy uses dynamic adapter loading via broker_factory.py
 print('  [✓] websocket_proxy configured with dynamic adapter loader')
 
