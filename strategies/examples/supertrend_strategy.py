@@ -32,9 +32,9 @@ MULTIPLIER = float(os.getenv("SUPERTREND_MULTIPLIER", "3.0"))
 
 def calculate_supertrend(df, period=10, multiplier=3.0):
     """Calculates Supertrend ATR upper and lower bands and trend direction (+1 for BUY, -1 for SELL)."""
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
 
     # Calculate Average True Range (ATR)
     tr1 = high - low
@@ -125,7 +125,7 @@ def run_supertrend_bot():
                             action="BUY",
                             product=PRODUCT,
                             quantity=QUANTITY,
-                            price_type="MARKET",
+                            pricetype="MARKET",
                         )
                     elif latest_trend == -1:
                         print(f"🔻 SUPERTREND SELL SIGNAL DETECTED! Placing SELL Order for {QUANTITY} qty of {SYMBOL}...")
@@ -136,7 +136,7 @@ def run_supertrend_bot():
                             action="SELL",
                             product=PRODUCT,
                             quantity=QUANTITY,
-                            price_type="MARKET",
+                            pricetype="MARKET",
                         )
 
                 current_trend = latest_trend
