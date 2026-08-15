@@ -89,7 +89,7 @@ echo -e "${GREEN}[+] Installing Python dependencies...${NC}"
 if [ -f "requirements.txt" ]; then
   ./venv/bin/pip install -r requirements.txt
 fi
-./venv/bin/pip install httpx python-socketio websocket-client pandas
+./venv/bin/pip install httpx python-socketio websocket-client pandas python-dotenv
 
 # ------------------------------------------------------------------------------
 # Step 4: Extract Embedded AC Agarwal Plugin Payload
@@ -158,9 +158,9 @@ except Exception as e:
 "
 
 # ------------------------------------------------------------------------------
-# Step 6: Generate .env Configuration
+# Step 6: Generate .env Configuration & Security Pepper/Salt
 # ------------------------------------------------------------------------------
-echo -e "\\n${CYAN}--- Step 6: Updating .env Configuration ---${NC}"
+echo -e "\\n${CYAN}--- Step 6: Updating .env Configuration & Security Tokens ---${NC}"
 
 if [ ! -f ".env" ]; then
   if [ -f ".env.example" ]; then
@@ -190,17 +190,33 @@ update_env "BROKER_BASE_URL" "$BASE_URL"
 update_env "HOST" "0.0.0.0"
 update_env "PORT" "5001"
 
+# Generate mandatory OpenAlgo v2.0 security tokens if absent or default
+if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "^API_KEY_PEPPER=$" .env; then
+  GEN_PEPPER=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
+  update_env "API_KEY_PEPPER" "$GEN_PEPPER"
+fi
+
+if ! grep -q "^FERNET_SALT=" .env || grep -q "^FERNET_SALT=$" .env; then
+  GEN_SALT=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
+  update_env "FERNET_SALT" "$GEN_SALT"
+fi
+
+if ! grep -q "^SECRET_KEY=" .env || grep -q "^SECRET_KEY=$" .env; then
+  GEN_SECRET=$(./venv/bin/python3 -c "import secrets; print(secrets.token_hex(32))")
+  update_env "SECRET_KEY" "$GEN_SECRET"
+  update_env "APP_KEY" "$GEN_SECRET"
+fi
+
 # ------------------------------------------------------------------------------
 # Step 7: Verify Installation & Systemd Service
 # ------------------------------------------------------------------------------
 echo -e "\\n${CYAN}--- Step 7: Verifying Module Imports & Configuring systemd ---${NC}"
 
 ./venv/bin/python3 -c "
-try:
-    from dotenv import load_dotenv
-    load_dotenv('.env')
-except Exception:
-    pass
+import os
+from dotenv import load_dotenv
+load_dotenv('.env')
+
 import broker.acagarwal.api.auth_api
 import broker.acagarwal.api.order_api
 import broker.acagarwal.api.data
