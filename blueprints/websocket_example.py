@@ -171,14 +171,21 @@ def api_get_websocket_apikey():
             {"status": "error", "message": "Session not found - please refresh page"}
         ), 401
 
-    from database.auth_db import get_api_key_for_tradingview
+    from database.auth_db import (
+        create_api_key,
+        get_api_key_for_tradingview,
+        get_first_available_api_key,
+    )
 
     api_key = get_api_key_for_tradingview(username)
+    if not api_key:
+        api_key = get_first_available_api_key()
 
     if not api_key:
-        return jsonify(
-            {"status": "error", "message": "No API key found. Please generate an API key first."}
-        ), 404
+        import secrets
+        new_key = f"oa_{secrets.token_hex(16)}"
+        created_key, _ = create_api_key(username, new_key)
+        api_key = created_key or new_key
 
     return jsonify({"status": "success", "api_key": api_key}), 200
 
@@ -193,13 +200,18 @@ def api_get_websocket_config():
         ), 401
 
     import os
-
     from flask import request
 
     websocket_url = os.getenv("WEBSOCKET_URL", "ws://localhost:8765")
 
-    # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
-    if request.is_secure and websocket_url.startswith("ws://"):
+    req_host = request.host.split(":")[0]
+    if req_host not in ("127.0.0.1", "localhost") and (
+        "127.0.0.1" in websocket_url or "localhost" in websocket_url
+    ):
+        ws_port = os.getenv("WEBSOCKET_PORT", "8765")
+        scheme = "wss" if request.is_secure else "ws"
+        websocket_url = f"{scheme}://{req_host}:{ws_port}"
+    elif request.is_secure and websocket_url.startswith("ws://"):
         websocket_url = websocket_url.replace("ws://", "wss://")
         logger.info(f"Upgraded WebSocket URL to secure: {websocket_url}")
 

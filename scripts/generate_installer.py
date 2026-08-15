@@ -209,6 +209,9 @@ update_env "FLASK_PORT" "5001"
 update_env "PORT" "5001"
 update_env "REDIRECT_URL" "http://168.144.22.51:5001/acagarwal/callback"
 update_env "HOST_SERVER" "http://168.144.22.51:5001"
+update_env "WEBSOCKET_HOST" "0.0.0.0"
+update_env "WEBSOCKET_PORT" "8765"
+update_env "WEBSOCKET_URL" "ws://168.144.22.51:8765"
 
 # Generate mandatory OpenAlgo v2.0 security tokens if absent or default placeholder
 if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "OPENALGO_PLACEHOLDER" .env; then
