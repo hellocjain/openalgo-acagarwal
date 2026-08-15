@@ -196,6 +196,11 @@ update_env "PORT" "5001"
 echo -e "\\n${CYAN}--- Step 7: Verifying Module Imports & Configuring systemd ---${NC}"
 
 ./venv/bin/python3 -c "
+try:
+    from dotenv import load_dotenv
+    load_dotenv('.env')
+except Exception:
+    pass
 import broker.acagarwal.api.auth_api
 import broker.acagarwal.api.order_api
 import broker.acagarwal.api.data

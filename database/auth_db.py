@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 # Initialize Argon2 hasher
 ph = PasswordHasher()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///db/openalgo.db"
 
 # Security: Require API_KEY_PEPPER environment variable (fail fast if missing)
 # Pepper must be at least 32 bytes (64 hex characters) for cryptographic security
