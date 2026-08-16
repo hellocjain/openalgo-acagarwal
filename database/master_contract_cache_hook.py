@@ -41,31 +41,39 @@ def load_symbols_to_cache(broker: str) -> bool:
                 f"in {load_time:.2f} seconds"
             )
 
-            # Emit success event to frontend
-            socketio.emit(
-                "cache_loaded",
-                {
-                    "status": "success",
-                    "broker": broker,
-                    "total_symbols": stats["total_symbols"],
-                    "memory_usage_mb": stats["stats"]["memory_usage_mb"],
-                    "load_time": f"{load_time:.2f}",
-                },
-            )
+            # Emit success event to frontend if socketio is initialized
+            try:
+                if hasattr(socketio, "server") and socketio.server is not None:
+                    socketio.emit(
+                        "cache_loaded",
+                        {
+                            "status": "success",
+                            "broker": broker,
+                            "total_symbols": stats["total_symbols"],
+                            "memory_usage_mb": stats["stats"]["memory_usage_mb"],
+                            "load_time": f"{load_time:.2f}",
+                        },
+                    )
+            except Exception:
+                pass
 
             return True
         else:
             logger.error(f"Failed to load symbols into cache for broker: {broker}")
 
             # Emit error event to frontend
-            socketio.emit(
-                "cache_loaded",
-                {
-                    "status": "error",
-                    "broker": broker,
-                    "message": "Failed to load symbols into cache",
-                },
-            )
+            try:
+                if hasattr(socketio, "server") and socketio.server is not None:
+                    socketio.emit(
+                        "cache_loaded",
+                        {
+                            "status": "error",
+                            "broker": broker,
+                            "message": "Failed to load symbols into cache",
+                        },
+                    )
+            except Exception:
+                pass
 
             return False
 
@@ -73,7 +81,11 @@ def load_symbols_to_cache(broker: str) -> bool:
         logger.exception(f"Error loading symbols to cache: {e}")
 
         # Emit error event to frontend
-        socketio.emit("cache_loaded", {"status": "error", "broker": broker, "message": str(e)})
+        try:
+            if hasattr(socketio, "server") and socketio.server is not None:
+                socketio.emit("cache_loaded", {"status": "error", "broker": broker, "message": str(e)})
+        except Exception:
+            pass
 
         return False
 
