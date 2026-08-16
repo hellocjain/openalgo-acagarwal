@@ -937,10 +937,12 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
 def get_symbol_count() -> int:
     """Get the total count of symbols in the database"""
     try:
-        from database.symbol import SymToken
+        from sqlalchemy import text
+        from database.symbol import engine
 
-        count = SymToken.query.count()
-        return count
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT count(*) FROM symtoken")).scalar()
+            return res or 0
     except Exception as e:
         logger.exception(f"Error while counting symbols: {e}")
         return 0
