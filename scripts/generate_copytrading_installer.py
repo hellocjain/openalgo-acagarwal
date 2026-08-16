@@ -278,7 +278,7 @@ print('  [✓] All AC Agarwal broker modules and WebSocket proxy adapter verifie
 
 try:
     from database.user_db import add_user, find_user_by_exact_username, init_db as init_user_db
-    from database.auth_db import init_auth_db, upsert_auth
+    from database.auth_db import init_db as init_auth_db, upsert_auth
     from database.copy_trading_db import init_copy_trading_db
     init_user_db()
     init_auth_db()
