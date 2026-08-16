@@ -33,7 +33,7 @@ def fetch_account_funds_and_pnl(account: Dict[str, Any]) -> Dict[str, Any]:
 
     headers = {"Content-Type": "application/json", "Authorization": token}
     funds_url = f"{INTERACTIVE_URL}/user/balance"
-    positions_url = f"{INTERACTIVE_URL}/portfolio/positions"
+    positions_url = f"{INTERACTIVE_URL}/portfolio/positions?dayOrNet=NetWise"
 
     available_cash = 0.0
     total_pnl = 0.0
@@ -160,7 +160,7 @@ def squareoff_single_account(account: Dict[str, Any]) -> Dict[str, Any]:
 
     # 2. Fetch and close open positions
     try:
-        pos_url = f"{INTERACTIVE_URL}/portfolio/positions"
+        pos_url = f"{INTERACTIVE_URL}/portfolio/positions?dayOrNet=NetWise"
         pos_resp = requests.get(pos_url, headers=headers, timeout=4)
         if pos_resp.status_code == 200:
             pos_data = pos_resp.json()

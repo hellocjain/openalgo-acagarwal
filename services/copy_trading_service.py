@@ -200,36 +200,27 @@ def execute_order_for_single_account(
     qty_slices = slice_order_quantities(child_qty, symbol, exchange)
 
     placed_orders = []
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": token,
-    }
-
-    url = f"{INTERACTIVE_URL}/orders"
+    from broker.acagarwal.api.order_api import place_order_api
 
     for chunk_qty in qty_slices:
-        payload = {
-            "exchangeSegment": exchange,
-            "exchangeInstrumentID": order_data.get("token") or order_data.get("instrument_id") or symbol,
-            "productType": product,
-            "orderType": pricetype,
-            "orderSide": action,
-            "timeInForce": "DAY",
-            "disclosedQuantity": 0,
-            "orderQuantity": chunk_qty,
-            "limitPrice": price,
-            "stopPrice": trigger_price,
-            "orderUniqueIdentifier": f"CP_{account_id}_{int(time.time()*1000)}",
+        child_order_payload = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "action": action,
+            "quantity": str(chunk_qty),
+            "pricetype": pricetype,
+            "product": product,
+            "price": str(price) if price else "0",
+            "trigger_price": str(trigger_price) if trigger_price else "0",
+            "disclosed_quantity": "0",
         }
 
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=5)
-            data = resp.json()
+            resp, resp_data, child_order_id = place_order_api(child_order_payload, auth=token)
             latency_ms = (time.time() - start_time) * 1000
 
-            if resp.status_code == 200 and data.get("type") == "success":
-                child_order_id = str(data.get("result", {}).get("AppOrderID", ""))
-                placed_orders.append(child_order_id)
+            if getattr(resp, "status_code", getattr(resp, "status", 500)) == 200 and resp_data.get("type") == "success":
+                placed_orders.append(str(child_order_id))
                 record_copy_order(
                     account_id=account_id,
                     symbol=symbol,
@@ -240,14 +231,14 @@ def execute_order_for_single_account(
                     pricetype=pricetype,
                     product=product,
                     master_order_id=master_order_id,
-                    child_order_id=child_order_id,
+                    child_order_id=str(child_order_id),
                     strategy=order_data.get("strategy"),
                     status="placed",
                     message="Order placed successfully",
                     latency_ms=latency_ms,
                 )
             else:
-                err_msg = data.get("description") or data.get("message") or f"HTTP {resp.status_code}"
+                err_msg = resp_data.get("description") or resp_data.get("message") or resp_data.get("error") or "Order placement failed"
                 record_copy_order(
                     account_id=account_id,
                     symbol=symbol,
@@ -258,18 +249,12 @@ def execute_order_for_single_account(
                     pricetype=pricetype,
                     product=product,
                     master_order_id=master_order_id,
-                    status="rejected",
-                    message=err_msg,
+                    child_order_id=None,
+                    strategy=order_data.get("strategy"),
+                    status="failed",
+                    message=str(err_msg),
                     latency_ms=latency_ms,
                 )
-                return {
-                    "account_id": account_id,
-                    "account_name": account_name,
-                    "client_code": client_code,
-                    "status": "rejected",
-                    "message": err_msg,
-                    "latency_ms": latency_ms,
-                }
         except Exception as ex:
             latency_ms = (time.time() - start_time) * 1000
             record_copy_order(
@@ -278,26 +263,23 @@ def execute_order_for_single_account(
                 exchange=exchange,
                 action=action,
                 quantity=chunk_qty,
+                price=price,
+                pricetype=pricetype,
+                product=product,
                 master_order_id=master_order_id,
-                status="error",
+                child_order_id=None,
+                strategy=order_data.get("strategy"),
+                status="failed",
                 message=str(ex),
                 latency_ms=latency_ms,
             )
-            return {
-                "account_id": account_id,
-                "account_name": account_name,
-                "client_code": client_code,
-                "status": "error",
-                "message": str(ex),
-                "latency_ms": latency_ms,
-            }
 
     latency_ms = (time.time() - start_time) * 1000
     return {
         "account_id": account_id,
         "account_name": account_name,
         "client_code": client_code,
-        "status": "success",
+        "status": "success" if placed_orders else "error",
         "quantity": child_qty,
         "order_ids": placed_orders,
         "latency_ms": latency_ms,
