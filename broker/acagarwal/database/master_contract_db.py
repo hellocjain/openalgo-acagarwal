@@ -273,14 +273,19 @@ def master_contract_download():
             copy_from_dataframe(combined_df)
             logger.info(f"[AC Agarwal] Master contract download and import complete: {len(combined_df)} records")
 
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
-        try:
-            socketio.emit("master_contract_status", {"status": "success", "broker": "acagarwal"})
-        except Exception:
-            pass
-        return True
+            try:
+                socketio.emit("master_contract_status", {"status": "success", "broker": "acagarwal"})
+            except Exception:
+                pass
+            return True
+        else:
+            logger.error("[AC Agarwal] No records downloaded during master contract download")
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            return False
     except Exception as e:
         logger.error(f"[AC Agarwal] Error in master_contract_download: {e}")
         try:
