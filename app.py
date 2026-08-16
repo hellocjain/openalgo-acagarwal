@@ -343,6 +343,8 @@ def create_app():
     app.register_blueprint(copy_trading_bp)  # Register Copy Trading blueprint
     csrf.exempt(copy_trading_bp)
     init_copy_trading_db()
+    from services.copy_trading_service import start_copy_trading_heartbeat
+    start_copy_trading_heartbeat()
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
     # Pre-flight refusal: must NEVER coexist with FLASK_DEBUG=True (debug-mode

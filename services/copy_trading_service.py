@@ -361,3 +361,39 @@ def broadcast_copy_order(
         "total_latency_ms": round(total_latency_ms, 2),
         "results": results,
     }
+
+
+# ==============================================================================
+# Proactive Heartbeat & Order Reconciliation Daemon (from Algomirror)
+# ==============================================================================
+_HEARTBEAT_RUNNING = False
+
+
+def _heartbeat_worker():
+    """Background heartbeat loop that pings accounts and auto-reconnects expired sessions."""
+    global _HEARTBEAT_RUNNING
+    logger.info("[Copy Heartbeat] Background session monitor started.")
+    while _HEARTBEAT_RUNNING:
+        try:
+            accounts = get_all_child_accounts(active_only=True, include_secrets=True)
+            for acc in accounts:
+                try:
+                    get_or_refresh_child_token(acc)
+                except Exception as ex:
+                    logger.error(f"[Copy Heartbeat] Error pinging account {acc.get('account_name')}: {ex}")
+        except Exception as e:
+            logger.error(f"[Copy Heartbeat] Monitor loop exception: {e}")
+
+        # Sleep for 60 seconds between ping cycles
+        time.sleep(60)
+
+
+def start_copy_trading_heartbeat():
+    """Start the proactive heartbeat monitor thread if not already running."""
+    global _HEARTBEAT_RUNNING
+    if not _HEARTBEAT_RUNNING:
+        import threading
+        _HEARTBEAT_RUNNING = True
+        t = threading.Thread(target=_heartbeat_worker, daemon=True, name="CopyTradingHeartbeat")
+        t.start()
+
