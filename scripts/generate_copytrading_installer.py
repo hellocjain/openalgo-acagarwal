@@ -161,7 +161,7 @@ echo -e "${GREEN}[+] AC Agarwal plugin files extracted to broker/acagarwal/.${NC
 # ------------------------------------------------------------------------------
 echo -e "\\n${CYAN}--- Step 5: Patching Core OpenAlgo Platform Registrations ---${NC}"
 
-./venv/bin/python3 -c "
+./venv/bin/python3 << 'EOF_REG'
 import re, sys
 
 print('  [✓] websocket_proxy configured with dynamic adapter loader')
@@ -169,8 +169,8 @@ print('  [✓] websocket_proxy configured with dynamic adapter loader')
 try:
     with open('services/order_update_service.py', 'r') as f:
         content = f.read()
-    if '\"acagarwal\"' not in content:
-        content = content.replace('_POLLING_BROKERS = {', '_POLLING_BROKERS = {\"acagarwal\", ')
+    if '"acagarwal"' not in content:
+        content = content.replace('_POLLING_BROKERS = {', '_POLLING_BROKERS = {"acagarwal", ')
         with open('services/order_update_service.py', 'w') as f:
             f.write(content)
         print('  [✓] Patched services/order_update_service.py')
@@ -182,8 +182,8 @@ except Exception as e:
 try:
     with open('blueprints/brlogin.py', 'r') as f:
         content = f.read()
-    if '\"acagarwal\"' not in content:
-        content = content.replace('\"fivepaisaxts\"', '\"fivepaisaxts\", \"acagarwal\"')
+    if '"acagarwal"' not in content:
+        content = content.replace('"fivepaisaxts"', '"fivepaisaxts", "acagarwal"')
         with open('blueprints/brlogin.py', 'w') as f:
             f.write(content)
         print('  [✓] Patched blueprints/brlogin.py')
@@ -191,7 +191,7 @@ try:
         print('  [✓] blueprints/brlogin.py already registered')
 except Exception as e:
     print(f'  [!] brlogin patch notice: {e}')
-"
+EOF_REG
 
 # ------------------------------------------------------------------------------
 # Step 6: Generate .env Configuration & Security Pepper/Salt
@@ -211,8 +211,8 @@ fi
 update_env() {
   key="$1"
   val="$2"
-  if grep -q "^${key}\\\\s*=" .env; then
-    sed -i.bak "s|^${key}\\\\s*=.*|${key} = '${val}'|" .env && rm -f .env.bak
+  if grep -q "^${key}\\s*=" .env; then
+    sed -i.bak "s|^${key}\\s*=.*|${key} = '${val}'|" .env && rm -f .env.bak
   elif grep -q "^${key}=" .env; then
     sed -i.bak "s|^${key}=.*|${key} = '${val}'|" .env && rm -f .env.bak
   else
@@ -259,7 +259,7 @@ export ADMIN_USERNAME_ENV="$ADMIN_USERNAME"
 export ADMIN_PASSWORD_ENV="$ADMIN_PASSWORD"
 export USER_ID_ENV="$USER_ID"
 
-./venv/bin/python3 -c "
+./venv/bin/python3 << 'EOF_VERIFY'
 import os
 from dotenv import load_dotenv
 load_dotenv('.env')
@@ -291,17 +291,17 @@ try:
     user = find_user_by_exact_username(admin_user)
     if not user:
         add_user(admin_user, f"{admin_user.lower()}@openalgo.local", admin_pass, is_admin=True)
-        print(f'  [✓] Client admin user \"{admin_user}\" initialized in database')
+        print(f'  [✓] Client admin user "{admin_user}" initialized in database')
     else:
         user.set_password(admin_pass)
-        print(f'  [✓] Client admin user \"{admin_user}\" password configured')
+        print(f'  [✓] Client admin user "{admin_user}" password configured')
 
     if broker_user_id:
         upsert_auth(admin_user, broker_user_id, broker_user_id)
-        print(f'  [✓] Linked master broker client ID \"{broker_user_id}\" to portal user \"{admin_user}\"')
+        print(f'  [✓] Linked master broker client ID "{broker_user_id}" to portal user "{admin_user}"')
 except Exception as user_err:
     print(f'  [!] User DB setup notice: {user_err}')
-"
+EOF_VERIFY
 
 if [ "$OS_TYPE" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
   SERVICE_FILE="/etc/systemd/system/openalgo.service"
