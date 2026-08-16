@@ -30,8 +30,10 @@ echo "    OpenAlgo v2.0 + AC Agarwal Copy-Trading Platform Installer        "
 echo "======================================================================"
 echo -e "${NC}"
 
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${YELLOW}[!] Running as non-root user. Sudo will be used for system packages.${NC}"
+OS_TYPE=$(uname -s)
+
+if [ "$EUID" -ne 0 ] && [ "$OS_TYPE" = "Linux" ]; then
+  echo -e "${YELLOW}[!] Running as non-root user on Linux. Sudo will be used for system packages.${NC}"
   SUDO="sudo"
 else
   SUDO=""
@@ -53,7 +55,7 @@ fi
 echo -e "\\n${CYAN}--- Step 1: OpenAlgo SaaS Client & Broker Configuration ---${NC}"
 
 # Auto-detect public server IP
-AUTO_DETECTED_IP=$(curl -s --connect-timeout 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
+AUTO_DETECTED_IP=$(curl -s --connect-timeout 2 ifconfig.me || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
 AUTO_DETECTED_IP=$(echo "$AUTO_DETECTED_IP" | xargs)
 
 if [ -f ".env" ]; then
@@ -108,11 +110,15 @@ if [ -z "$API_SECRET_MARKET" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# Step 2: Install Ubuntu Packages
+# Step 2: System Dependencies
 # ------------------------------------------------------------------------------
-echo -e "\\n${CYAN}--- Step 2: Installing Ubuntu Dependencies ---${NC}"
-$SUDO apt-get update -y
-$SUDO apt-get install -y python3 python3-venv python3-pip git curl build-essential sqlite3 lsof
+if [ "$OS_TYPE" = "Linux" ]; then
+  echo -e "\\n${CYAN}--- Step 2: Installing Ubuntu/Linux System Dependencies ---${NC}"
+  $SUDO apt-get update -y || true
+  $SUDO apt-get install -y python3 python3-venv python3-pip git curl build-essential sqlite3 lsof || true
+else
+  echo -e "\\n${CYAN}--- Step 2: Detected macOS (Using Native Python Environment) ---${NC}"
+fi
 
 # ------------------------------------------------------------------------------
 # Step 3: Clone/Prepare Repository
@@ -121,8 +127,7 @@ echo -e "\\n${CYAN}--- Step 3: Preparing OpenAlgo Copy-Trading Repository ---${N
 if [ "$INSTALL_DIR" != "$CURRENT_DIR" ]; then
   if [ ! -d "$INSTALL_DIR" ]; then
     echo -e "${GREEN}[+] Cloning OpenAlgo Copy-Trading repository into ${INSTALL_DIR}...${NC}"
-    $SUDO git clone https://github.com/hellocjain/openalgo-acagarwal-copytrading.git "$INSTALL_DIR"
-    $SUDO chown -R "$USER:$USER" "$INSTALL_DIR"
+    git clone https://github.com/hellocjain/openalgo-acagarwal-copytrading.git "$INSTALL_DIR"
   fi
   cd "$INSTALL_DIR"
 fi
@@ -159,10 +164,8 @@ echo -e "\\n${CYAN}--- Step 5: Patching Core OpenAlgo Platform Registrations ---
 ./venv/bin/python3 -c "
 import re, sys
 
-# 1. websocket_proxy uses dynamic adapter loading via broker_factory.py
 print('  [✓] websocket_proxy configured with dynamic adapter loader')
 
-# 2. Patch services/order_update_service.py
 try:
     with open('services/order_update_service.py', 'r') as f:
         content = f.read()
@@ -176,7 +179,6 @@ try:
 except Exception as e:
     print(f'  [!] order_update_service patch notice: {e}')
 
-# 3. Patch blueprints/brlogin.py
 try:
     with open('blueprints/brlogin.py', 'r') as f:
         content = f.read()
@@ -210,9 +212,9 @@ update_env() {
   key="$1"
   val="$2"
   if grep -q "^${key}\\\\s*=" .env; then
-    sed -i "s|^${key}\\\\s*=.*|${key} = '${val}'|" .env
+    sed -i.bak "s|^${key}\\\\s*=.*|${key} = '${val}'|" .env && rm -f .env.bak
   elif grep -q "^${key}=" .env; then
-    sed -i "s|^${key}=.*|${key} = '${val}'|" .env
+    sed -i.bak "s|^${key}=.*|${key} = '${val}'|" .env && rm -f .env.bak
   else
     echo "${key} = '${val}'" >> .env
   fi
@@ -300,10 +302,11 @@ except Exception as user_err:
     print(f'  [!] User DB setup notice: {user_err}')
 "
 
-SERVICE_FILE="/etc/systemd/system/openalgo.service"
-CURRENT_USER=$(whoami)
+if [ "$OS_TYPE" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+  SERVICE_FILE="/etc/systemd/system/openalgo.service"
+  CURRENT_USER=$(whoami)
 
-$SUDO bash -c "cat <<EOF > $SERVICE_FILE
+  $SUDO bash -c "cat <<EOF > $SERVICE_FILE
 [Unit]
 Description=OpenAlgo Copy-Trading Platform (AC Agarwal Broker)
 After=network.target
@@ -321,9 +324,18 @@ Environment=PATH=$INSTALL_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:
 WantedBy=multi-user.target
 EOF"
 
-$SUDO systemctl daemon-reload
-$SUDO systemctl enable openalgo
-$SUDO systemctl restart openalgo
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable openalgo
+  $SUDO systemctl restart openalgo
+  STATUS_CMD="sudo systemctl status openalgo"
+  LOGS_CMD="sudo journalctl -u openalgo -f"
+else
+  echo -e "\\n${GREEN}[+] Starting OpenAlgo in background on port 5001...${NC}"
+  pkill -f "app.py" 2>/dev/null || true
+  nohup ./venv/bin/python app.py > openalgo.log 2>&1 &
+  STATUS_CMD="lsof -i :5001"
+  LOGS_CMD="tail -f openalgo.log"
+fi
 
 echo -e "\\n${GREEN}======================================================================${NC}"
 echo -e "${GREEN}  ✓ OpenAlgo Copy-Trading Platform Installation Completed Successfully!${NC}"
@@ -332,8 +344,8 @@ echo -e "${CYAN}Web Portal URL:${NC} http://${STATIC_IP}:5001"
 echo -e "${CYAN}Copy Trading Hub:${NC} http://${STATIC_IP}:5001/copytrading"
 echo -e "${CYAN}Webhook Endpoint:${NC} http://${STATIC_IP}:5001/api/copy-trading/webhook"
 echo -e "${CYAN}Admin Username:${NC} ${ADMIN_USERNAME}"
-echo -e "${CYAN}Service Status:${NC} Run 'sudo systemctl status openalgo'"
-echo -e "${CYAN}Live Logs:${NC} Run 'sudo journalctl -u openalgo -f'"
+echo -e "${CYAN}Service Status:${NC} ${STATUS_CMD}"
+echo -e "${CYAN}Live Logs:${NC} ${LOGS_CMD}"
 echo -e "${GREEN}======================================================================${NC}\\n"
 '''
 
