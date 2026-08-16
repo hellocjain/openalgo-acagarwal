@@ -277,9 +277,10 @@ adapter = create_broker_adapter('acagarwal')
 print('  [✓] All AC Agarwal broker modules and WebSocket proxy adapter verified!')
 
 try:
-    from database.user_db import create_user, verify_user, reset_password
+    from database.user_db import add_user, find_user_by_exact_username, init_db as init_user_db
     from database.auth_db import init_auth_db, upsert_auth
     from database.copy_trading_db import init_copy_trading_db
+    init_user_db()
     init_auth_db()
     init_copy_trading_db()
     
@@ -287,13 +288,13 @@ try:
     admin_pass = os.getenv('ADMIN_PASSWORD_ENV', 'Admin@12345')
     broker_user_id = os.getenv('USER_ID_ENV', os.getenv('BROKER_USER_ID', ''))
 
-    if not verify_user(admin_user, admin_pass):
-        try:
-            create_user(admin_user, admin_pass)
-            print(f'  [✓] Client admin user \"{admin_user}\" initialized in database')
-        except Exception:
-            reset_password(admin_user, admin_pass)
-            print(f'  [✓] Client admin user \"{admin_user}\" password configured')
+    user = find_user_by_exact_username(admin_user)
+    if not user:
+        add_user(admin_user, f"{admin_user.lower()}@openalgo.local", admin_pass, is_admin=True)
+        print(f'  [✓] Client admin user \"{admin_user}\" initialized in database')
+    else:
+        user.set_password(admin_pass)
+        print(f'  [✓] Client admin user \"{admin_user}\" password configured')
 
     if broker_user_id:
         upsert_auth(admin_user, broker_user_id, broker_user_id)
