@@ -279,18 +279,25 @@ def mark_status_ready_without_download(broker):
     session = SessionLocal()
     try:
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
-        if status and status.last_download_time:
-            status.is_ready = True
-            status.status = "success"
-            status.message = "Using cached master contract"
-            status.last_updated = datetime.now()
-            session.commit()
-            logger.info(f"Marked existing master contract as ready for {broker}")
-            return True
+        from database.token_db import get_symbol_count
+        sym_count = get_symbol_count() or 0
+
+        if status:
+            if not status.last_download_time and sym_count > 0:
+                status.last_download_time = datetime.now()
+                status.download_date = date.today()
+            if status.last_download_time or sym_count > 0:
+                status.is_ready = True
+                status.status = "success"
+                status.message = "Using cached master contract"
+                status.total_symbols = str(sym_count)
+                status.last_updated = datetime.now()
+                session.commit()
+                logger.info(f"Marked existing master contract as ready for {broker} ({sym_count} symbols)")
+                return True
         return False
     except Exception as e:
-        logger.exception(f"Error marking status ready for {broker}: {str(e)}")
-        session.rollback()
+        logger.exception(f"Error marking status ready without download for {broker}: {str(e)}")
         return False
     finally:
         session.close()
