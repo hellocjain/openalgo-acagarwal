@@ -130,6 +130,12 @@ def react_dashboard():
     return serve_react_app()
 
 
+# Copy Trading
+@react_bp.route("/copytrading")
+def react_copytrading():
+    return serve_react_app()
+
+
 # Trading pages
 @react_bp.route("/positions")
 def react_positions():
