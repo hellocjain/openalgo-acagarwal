@@ -306,8 +306,20 @@ def async_master_contract_download(broker):
         except Exception as normalize_error:
             logger.exception(f"Could not normalize derivative underlyings: {normalize_error}")
 
-        # Most brokers return the socketio.emit result, we need to check completion
-        # by looking at the module's actual completion
+        # Check if master_contract_download succeeded
+        if master_contract_status is False:
+            from database.master_contract_status_db import mark_status_ready_without_download
+            if mark_status_ready_without_download(broker):
+                logger.info(f"Master contract download for {broker} returned False (broker server offline/weekend maintenance), using valid cached master contracts")
+                try:
+                    from database.master_contract_cache_hook import hook_into_master_contract_download
+                    hook_into_master_contract_download(broker)
+                except Exception:
+                    pass
+                return True
+            else:
+                update_status(broker, "error", "Master contract download failed from broker server")
+                return {"status": "error", "message": "Download failed from broker server"}
 
         # Try to get the symbol count from the database
         try:
@@ -352,8 +364,18 @@ def async_master_contract_download(broker):
 
     except Exception as e:
         logger.exception(f"Error during master contract download for {broker}: {str(e)}")
-        update_status(broker, "error", f"Master contract download error: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        from database.master_contract_status_db import mark_status_ready_without_download
+        if mark_status_ready_without_download(broker):
+            logger.info(f"Download failed for {broker} ({e}), but existing cached master contract is valid and marked ready.")
+            try:
+                from database.master_contract_cache_hook import hook_into_master_contract_download
+                hook_into_master_contract_download(broker)
+            except Exception:
+                pass
+            return True
+        else:
+            update_status(broker, "error", f"Master contract download error: {str(e)}")
+            return {"status": "error", "message": str(e)}
 
     logger.info("Master Contract Database Processing Completed")
 
