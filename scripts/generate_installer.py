@@ -48,9 +48,13 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Step 1: Credential Setup (Interactive or Non-Interactive Fallback)
+# Step 1: Interactive Installation & Client Configuration Setup
 # ------------------------------------------------------------------------------
-echo -e "\\n${CYAN}--- Step 1: AC Agarwal Credentials Configuration ---${NC}"
+echo -e "\\n${CYAN}--- Step 1: OpenAlgo SaaS Client & Broker Configuration ---${NC}"
+
+# Auto-detect public server IP
+AUTO_DETECTED_IP=$(curl -s --connect-timeout 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
+AUTO_DETECTED_IP=$(echo "$AUTO_DETECTED_IP" | xargs)
 
 if [ -f ".env" ]; then
   eval $(grep -E "^(BROKER_USER_ID|BROKER_API_KEY|BROKER_API_SECRET|BROKER_API_KEY_MARKET|BROKER_API_SECRET_MARKET|BROKER_BASE_URL)=" .env 2>/dev/null | xargs) || true
@@ -64,6 +68,25 @@ API_SECRET_MARKET="${API_SECRET_MARKET:-$BROKER_API_SECRET_MARKET}"
 BASE_URL="${BASE_URL:-$BROKER_BASE_URL}"
 BASE_URL=${BASE_URL:-https://symphony.acagarwal.com:3000}
 
+# Read Admin Portal Credentials
+if [ -z "$ADMIN_USERNAME" ]; then
+  read -p "Enter Admin Portal Username [default: admin]: " ADMIN_USERNAME
+  ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+fi
+
+if [ -z "$ADMIN_PASSWORD" ]; then
+  read -sp "Enter Admin Portal Password [default: Admin@12345]: " ADMIN_PASSWORD
+  echo ""
+  ADMIN_PASSWORD=${ADMIN_PASSWORD:-Admin@12345}
+fi
+
+# Read Server IP / Domain
+if [ -z "$STATIC_IP" ]; then
+  read -p "Enter Server Public IP / Domain [default: $AUTO_DETECTED_IP]: " STATIC_IP
+  STATIC_IP=${STATIC_IP:-$AUTO_DETECTED_IP}
+fi
+
+# Read Broker API Credentials
 if [ -z "$USER_ID" ]; then
   read -p "Enter AC Agarwal User ID (Client Code, e.g. DM933): " USER_ID
 fi
@@ -195,9 +218,6 @@ update_env() {
   fi
 }
 
-SERVER_IP=$(curl -s --connect-timeout 2 ifconfig.me || hostname -I | awk '{print $1}' || echo "127.0.0.1")
-SERVER_IP=$(echo "$SERVER_IP" | xargs)
-
 update_env "BROKER" "acagarwal"
 update_env "VALID_BROKERS" "acagarwal,fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,dhan,dhan_sandbox,definedge,deltaexchange,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
 update_env "BROKER_API_KEY" "$API_KEY"
@@ -210,11 +230,11 @@ update_env "FLASK_HOST_IP" "0.0.0.0"
 update_env "HOST" "0.0.0.0"
 update_env "FLASK_PORT" "5001"
 update_env "PORT" "5001"
-update_env "REDIRECT_URL" "http://${SERVER_IP}:5001/acagarwal/callback"
-update_env "HOST_SERVER" "http://${SERVER_IP}:5001"
+update_env "REDIRECT_URL" "http://${STATIC_IP}:5001/acagarwal/callback"
+update_env "HOST_SERVER" "http://${STATIC_IP}:5001"
 update_env "WEBSOCKET_HOST" "0.0.0.0"
 update_env "WEBSOCKET_PORT" "8765"
-update_env "WEBSOCKET_URL" "ws://${SERVER_IP}:8765"
+update_env "WEBSOCKET_URL" "ws://${STATIC_IP}:8765"
 
 # Generate mandatory OpenAlgo v2.0 security tokens if absent or default placeholder
 if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "OPENALGO_PLACEHOLDER" .env; then
@@ -229,9 +249,13 @@ if ! grep -q "^API_KEY_PEPPER=" .env || grep -q "OPENALGO_PLACEHOLDER" .env; the
 fi
 
 # ------------------------------------------------------------------------------
-# Step 7: Verify Installation & Systemd Service
+# Step 7: Verify Installation & Initialize Client Database Account
 # ------------------------------------------------------------------------------
-echo -e "\\n${CYAN}--- Step 7: Verifying Module Imports & Configuring systemd ---${NC}"
+echo -e "\\n${CYAN}--- Step 7: Verifying Module Imports & Initializing Client Database ---${NC}"
+
+export ADMIN_USERNAME_ENV="$ADMIN_USERNAME"
+export ADMIN_PASSWORD_ENV="$ADMIN_PASSWORD"
+export USER_ID_ENV="$USER_ID"
 
 ./venv/bin/python3 -c "
 import os
@@ -254,18 +278,22 @@ try:
     from database.user_db import create_user, verify_user, reset_password
     from database.auth_db import init_auth_db, upsert_auth
     init_auth_db()
-    if not verify_user('Chinmaya', 'Chinmaya@1'):
-        try:
-            create_user('Chinmaya', 'Chinmaya@1')
-            print('  [✓] Default user Chinmaya created with password Chinmaya@1')
-        except Exception:
-            reset_password('Chinmaya', 'Chinmaya@1')
-            print('  [✓] Password reset for user Chinmaya to Chinmaya@1')
+    
+    admin_user = os.getenv('ADMIN_USERNAME_ENV', 'admin')
+    admin_pass = os.getenv('ADMIN_PASSWORD_ENV', 'Admin@12345')
+    broker_user_id = os.getenv('USER_ID_ENV', os.getenv('BROKER_USER_ID', ''))
 
-    user_id = os.getenv('BROKER_USER_ID')
-    if user_id:
-        upsert_auth('Chinmaya', user_id, user_id)
-        print('  [✓] Upserted initial broker auth credentials for user Chinmaya')
+    if not verify_user(admin_user, admin_pass):
+        try:
+            create_user(admin_user, admin_pass)
+            print(f'  [✓] Client admin user \"{admin_user}\" initialized in database')
+        except Exception:
+            reset_password(admin_user, admin_pass)
+            print(f'  [✓] Client admin user \"{admin_user}\" password configured')
+
+    if broker_user_id:
+        upsert_auth(admin_user, broker_user_id, broker_user_id)
+        print(f'  [✓] Linked broker client ID \"{broker_user_id}\" to portal user \"{admin_user}\"')
 except Exception as user_err:
     print(f'  [!] User DB setup notice: {user_err}')
 "
@@ -296,20 +324,24 @@ $SUDO systemctl enable openalgo
 $SUDO systemctl restart openalgo
 
 echo -e "\\n${GREEN}======================================================================${NC}"
-echo -e "${GREEN}  ✓ OpenAlgo + AC Agarwal Installation Completed Successfully!       ${NC}"
+echo -e "${GREEN}  ✓ OpenAlgo SaaS Installation Completed Successfully!                ${NC}"
 echo -e "${GREEN}======================================================================${NC}"
-echo -e "${CYAN}Web Application URL:${NC} http://$(curl -s ifconfig.me || echo 'YOUR_SERVER_IP'):5001"
+echo -e "${CYAN}Web Portal URL:${NC} http://${STATIC_IP}:5001"
+echo -e "${CYAN}Admin Username:${NC} ${ADMIN_USERNAME}"
 echo -e "${CYAN}Service Status:${NC} Run 'sudo systemctl status openalgo'"
 echo -e "${CYAN}Live Logs:${NC} Run 'sudo journalctl -u openalgo -f'"
 echo -e "${GREEN}======================================================================${NC}\\n"
 '''
 
-    final_script = template.replace("__PAYLOAD_PLACEHOLDER__", b64_payload)
-    out_file = os.path.join(root_dir, "deploy_openalgo_acagarwal.sh")
-    with open(out_file, "w") as f:
-        f.write(final_script)
-    os.chmod(out_file, 0o755)
-    print(f"Generated standalone self-extracting installer: {out_file}")
+    # Insert b64 payload into placeholder
+    script_content = template.replace("__PAYLOAD_PLACEHOLDER__", b64_payload)
+
+    output_path = os.path.join(root_dir, "deploy_openalgo_acagarwal.sh")
+    with open(output_path, "w") as f:
+        f.write(script_content)
+
+    os.chmod(output_path, 0o755)
+    print(f"Generated standalone self-extracting installer: {output_path}")
 
 if __name__ == "__main__":
     main()
