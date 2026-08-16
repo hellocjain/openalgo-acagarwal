@@ -17,7 +17,6 @@ master_contract_status_bp = Blueprint("master_contract_status_bp", __name__, url
 
 
 @master_contract_status_bp.route("/master-contract/status", methods=["GET"])
-@check_session_validity
 def get_master_contract_status():
     """Get the current master contract download status"""
     try:
@@ -32,7 +31,6 @@ def get_master_contract_status():
 
 
 @master_contract_status_bp.route("/master-contract/ready", methods=["GET"])
-@check_session_validity
 def check_master_contract_ready():
     """Check if master contracts are ready for trading"""
     try:
