@@ -135,9 +135,22 @@ def get_status(broker):
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
 
         if status:
+            # Auto-heal status to success if symbols exist in DB
+            from database.token_db import get_symbol_count
+            sym_count = get_symbol_count() or 0
+            if status.status != "success" and sym_count > 0:
+                status.status = "success"
+                status.is_ready = True
+                status.message = "Using cached master contract"
+                status.total_symbols = str(sym_count)
+                if not status.last_download_time:
+                    status.last_download_time = datetime.now()
+                    status.download_date = date.today()
+                session.commit()
+
             # Detect stuck downloads: if status is 'downloading' but last_updated
             # is older than the timeout, auto-transition to 'error'
-            if (
+            elif (
                 status.status == "downloading"
                 and status.last_updated
                 and datetime.now() - status.last_updated > timedelta(minutes=DOWNLOAD_TIMEOUT_MINUTES)
@@ -176,6 +189,21 @@ def get_status(broker):
                 "download_duration_seconds": status.download_duration_seconds,
             }
         else:
+            from database.token_db import get_symbol_count
+            sym_count = get_symbol_count() or 0
+            if sym_count > 0:
+                return {
+                    "broker": broker,
+                    "status": "success",
+                    "message": "Using cached master contract",
+                    "last_updated": datetime.now().isoformat(),
+                    "total_symbols": str(sym_count),
+                    "is_ready": True,
+                    "last_download_time": datetime.now().isoformat(),
+                    "download_date": date.today().isoformat(),
+                    "exchange_stats": None,
+                    "download_duration_seconds": 0,
+                }
             return {
                 "broker": broker,
                 "status": "unknown",
