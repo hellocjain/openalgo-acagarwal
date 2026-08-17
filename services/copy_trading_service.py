@@ -744,7 +744,7 @@ def broadcast_copy_order(
         if not existing_strat:
             # Auto-register new strategy tag in database!
             logger.info(f"[Copy Trading] Auto-discovering and creating new strategy '{clean_strat_tag}' with timeframe {inferred_tf}...")
-            create_strategy(
+            strat_res = create_strategy(
                 strategy_tag=clean_strat_tag,
                 strategy_name=f"Auto-Discovered {clean_strat_tag}",
                 segment=exchange,
@@ -752,19 +752,14 @@ def broadcast_copy_order(
                 default_symbol=resolved_symbol,
                 description=f"Automatically registered from TradingView webhook on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             )
-            now_time = datetime.now().strftime("%H:%M:%S")
-            _PLAIN_ENGLISH_FEED.appendleft({
-                "timestamp": now_time,
-                "type": "info",
-                "action": "AUTO-DISCOVER",
-                "symbol": resolved_symbol,
-                "strategy": clean_strat_tag,
-                "total_clients": 0,
-                "successful": 0,
-                "failed": 0,
-                "latency_ms": 0.0,
-                "text": f"✨ New Strategy [{clean_strat_tag}] ({inferred_tf}) auto-discovered and registered! Click 'Manage Subscribers' on Strategy Card to assign clients.",
-            })
+            # Auto-subscribe active accounts so trades execute instantly!
+            new_strat_id = strat_res.get("data", {}).get("id")
+            all_active = get_all_child_accounts(active_only=True)
+            if new_strat_id and all_active:
+                from database.copy_trading_db import bulk_assign_subscribers_to_strategy
+                sub_list = [{"account_id": a["id"], "multiplier": a.get("multiplier", 1.0) or 1.0, "is_active": True} for a in all_active]
+                bulk_assign_subscribers_to_strategy(new_strat_id, sub_list)
+                logger.info(f"[Copy Trading] Auto-subscribed {len(all_active)} active accounts to new strategy '{clean_strat_tag}'")
         elif existing_strat.get("timeframe") in ["1m", "15m", None] and inferred_tf not in ["1m", "15m"]:
             # Auto-correct timeframe if tag contains a more accurate timeframe (e.g. 10s)
             try:
@@ -784,29 +779,16 @@ def broadcast_copy_order(
     elif clean_strat_tag and clean_strat_tag not in ["GLOBAL", "ALL"]:
         target_accounts = get_active_subscribers_for_strategy_tag(clean_strat_tag)
         if not target_accounts:
-            now_time = datetime.now().strftime("%H:%M:%S")
-            logger.info(f"[Copy Trading] Strategy '{clean_strat_tag}' received signal for {resolved_symbol}. 0 active clients subscribed yet.")
-            _PLAIN_ENGLISH_FEED.appendleft({
-                "timestamp": now_time,
-                "type": "warning",
-                "action": order_data.get("action", "BUY").upper(),
-                "symbol": resolved_symbol,
-                "strategy": clean_strat_tag,
-                "total_clients": 0,
-                "successful": 0,
-                "failed": 0,
-                "latency_ms": 0.0,
-                "text": f"🔔 Signal received for [{clean_strat_tag}] on {resolved_symbol}. No clients subscribed yet - assign clients in Strategy Hub.",
-            })
-            return {
-                "status": "success",
-                "message": f"Strategy '{clean_strat_tag}' is registered, but 0 active clients are subscribed yet. Assign clients in dashboard.",
-                "results": [],
-                "total_accounts": 0,
-                "successful_orders": 0,
-                "failed_orders": 0,
-                "total_latency_ms": 0.0,
-            }
+            # If strategy has no subscribers yet, auto-subscribe all active client accounts so trade executes immediately!
+            all_active = get_all_child_accounts(active_only=True, include_secrets=True)
+            if all_active:
+                logger.info(f"[Copy Trading] Strategy '{clean_strat_tag}' had 0 mapped subscribers. Auto-subscribing {len(all_active)} active accounts so trade executes immediately...")
+                existing_strat = get_strategy_by_tag(clean_strat_tag)
+                if existing_strat:
+                    from database.copy_trading_db import bulk_assign_subscribers_to_strategy
+                    sub_list = [{"account_id": a["id"], "multiplier": a.get("multiplier", 1.0) or 1.0, "is_active": True} for a in all_active]
+                    bulk_assign_subscribers_to_strategy(existing_strat["id"], sub_list)
+                target_accounts = get_active_subscribers_for_strategy_tag(clean_strat_tag) or all_active
     else:
         target_accounts = get_all_child_accounts(active_only=True, include_secrets=True)
 
