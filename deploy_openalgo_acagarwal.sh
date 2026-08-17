@@ -107,7 +107,7 @@ echo -e "\n${CYAN}--- Step 3: Preparing OpenAlgo Repository ---${NC}"
 if [ "$INSTALL_DIR" != "$CURRENT_DIR" ]; then
   if [ ! -d "$INSTALL_DIR" ]; then
     echo -e "${GREEN}[+] Cloning OpenAlgo repository into ${INSTALL_DIR}...${NC}"
-    $SUDO git clone https://github.com/openalgo/openalgo.git "$INSTALL_DIR"
+    $SUDO git clone https://github.com/hellocjain/openalgo-acagarwal.git "$INSTALL_DIR"
     $SUDO chown -R "$USER:$USER" "$INSTALL_DIR"
   fi
   cd "$INSTALL_DIR"
