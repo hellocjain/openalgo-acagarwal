@@ -419,6 +419,14 @@ def emergency_squareoff():
     return jsonify(res)
 
 
+@copy_trading_bp.route("/morning-check", methods=["POST"])
+def run_morning_check():
+    """Run full 08:30 AM pre-flight login drill across all accounts and dispatch Telegram report."""
+    from services.copy_risk_service import run_premarket_fire_drill
+    res = run_premarket_fire_drill()
+    return jsonify(res)
+
+
 @copy_trading_bp.route("/sync", methods=["POST"])
 def sync_telemetry():
     """Refresh funds and PnL telemetry across all accounts."""

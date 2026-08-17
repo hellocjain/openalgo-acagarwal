@@ -5,7 +5,10 @@ Square-Off All and real-time MTM Max Daily Loss circuit breakers across all AC A
 """
 
 import concurrent.futures
+import os
+import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -459,7 +462,7 @@ def run_premarket_fire_drill() -> Dict[str, Any]:
     total_time_ms = (time.time() - t0) * 1000
     logger.info(f"[Fire Drill] Completed in {total_time_ms:.1f}ms: {ready_count} Ready, {issue_count} Issues.")
 
-    return {
+    report = {
         "status": "success",
         "total_tested": len(accounts),
         "ready_count": ready_count,
@@ -467,3 +470,104 @@ def run_premarket_fire_drill() -> Dict[str, Any]:
         "total_time_ms": round(total_time_ms, 1),
         "results": results,
     }
+
+    # Automatically dispatch Telegram Morning Briefing
+    dispatch_morning_telegram_report(report)
+
+    return report
+
+
+def dispatch_morning_telegram_report(report: Dict[str, Any]):
+    """
+    Asynchronously dispatch a comprehensive 8:30 AM pre-market readiness report to Telegram.
+    """
+    def _send():
+        try:
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            chat_id = os.getenv("TELEGRAM_CHAT_ID")
+            if not bot_token or not chat_id:
+                return
+
+            total = report.get("total_tested", 0)
+            ready = report.get("ready_count", 0)
+            issues = report.get("issue_count", 0)
+            results = report.get("results", [])
+
+            total_funds = sum(r.get("funds", 0.0) for r in results)
+            avg_lat = sum(r.get("latency_ms", 0.0) for r in results) / max(1, len(results))
+
+            status_icon = "🟢" if issues == 0 else ("🟡" if ready > 0 else "🔴")
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            msg = (
+                f"🌅 <b>OpenAlgo 08:30 AM Pre-Market Readiness Report</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👥 <b>Total Accounts:</b> {total}\n"
+                f"🟢 <b>Ready & Logged In:</b> <b>{ready}</b>\n"
+                f"🔴 <b>Need Attention:</b> <b>{issues}</b>\n"
+                f"💰 <b>Total Margin Pool:</b> ₹{total_funds:,.2f}\n"
+                f"⏱️ <b>Avg API Latency:</b> <code>{avg_lat:.1f}ms</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+            # Highlight specific accounts needing attention
+            problem_accs = [r for r in results if not r.get("ready")]
+            if problem_accs:
+                msg += "<b>⚠️ Accounts Requiring Action:</b>\n"
+                for p in problem_accs[:8]:  # Limit top 8
+                    msg += f"• <code>{p.get('client_code')}</code> ({p.get('account_name')}): {p.get('issue') or 'Auth Error'}\n"
+                if len(problem_accs) > 8:
+                    msg += f"<i>...and {len(problem_accs) - 8} more</i>\n"
+                msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+
+            msg += f"⚡ <i>{ready} active accounts primed for 09:00 AM MCX & 09:15 AM NSE open!</i>"
+
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+        except Exception as ex:
+            logger.debug(f"[Morning Telegram] Report dispatch notice: {ex}")
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+# =====================================================================
+# 8:30 AM Automated Morning Scheduler Worker
+# =====================================================================
+_MORNING_SCHEDULER_RUNNING = False
+_LAST_MORNING_RUN_DATE = None
+
+
+def _morning_scheduler_worker():
+    """
+    Background daemon checking every 30 seconds for 08:30 AM (IST) on Monday-Friday.
+    Automatically executes the pre-market login drill and sends the Telegram report.
+    """
+    global _MORNING_SCHEDULER_RUNNING, _LAST_MORNING_RUN_DATE
+    logger.info("[Morning Bot] 08:30 AM Auto-Login & Health Monitor started.")
+
+    while _MORNING_SCHEDULER_RUNNING:
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+
+            # Check if weekday (Monday=0 to Friday=4)
+            if now.weekday() < 5:
+                # Target window: 08:30 AM to 08:35 AM
+                if now.hour == 8 and now.minute >= 30:
+                    if _LAST_MORNING_RUN_DATE != today_str:
+                        logger.info(f"[Morning Bot] 08:30 AM triggered! Running automatic pre-market health check for {today_str}...")
+                        _LAST_MORNING_RUN_DATE = today_str
+                        run_premarket_fire_drill()
+        except Exception as e:
+            logger.error(f"[Morning Bot] Scheduler loop error: {e}")
+
+        time.sleep(30)
+
+
+def start_morning_autologin_scheduler():
+    """Start the 08:30 AM morning auto-login scheduler thread."""
+    global _MORNING_SCHEDULER_RUNNING
+    if not _MORNING_SCHEDULER_RUNNING:
+        _MORNING_SCHEDULER_RUNNING = True
+        t = threading.Thread(target=_morning_scheduler_worker, daemon=True, name="MorningAutoLoginBot")
+        t.start()

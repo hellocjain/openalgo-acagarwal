@@ -860,6 +860,19 @@ def setup_environment(app):
                 name="WhatsAppAutoStart",
             ).start()
 
+            # Auto-initialize Copy Trading DB and background daemons
+            try:
+                from database.copy_trading_db import init_copy_trading_db
+                from services.copy_trading_service import start_copy_trading_heartbeat
+                from services.copy_risk_service import start_morning_autologin_scheduler
+
+                init_copy_trading_db()
+                start_copy_trading_heartbeat()
+                start_morning_autologin_scheduler()
+                logger.info("Copy Trading Engine & 08:30 AM Morning Auto-Login Bot initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Copy Trading daemons: {e}")
+
             # Auto-start analyzer mode services (depends on DB being ready)
             try:
                 from database.settings_db import get_analyze_mode

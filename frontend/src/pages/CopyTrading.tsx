@@ -941,7 +941,7 @@ if strategy.position_size != strategy.position_size[1]
 
           <Button variant="outline" size="sm" onClick={handleRunFireDrill} className="gap-1.5 border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50">
             <Flame className="h-4 w-4" />
-            Fire Drill
+            08:30 AM Pre-Flight Check
           </Button>
 
           <Button variant="outline" size="sm" onClick={handleSyncBalances} disabled={syncing} className="gap-1.5">
@@ -984,6 +984,9 @@ if strategy.position_size != strategy.position_size[1]
           </div>
 
           <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-[11px] font-mono border-slate-700 text-slate-300 hidden sm:inline-flex">
+              ⏰ Auto-Login Cron: 08:30 AM (Mon-Fri) • Telegram: ON
+            </Badge>
             <Button
               variant="secondary"
               size="sm"
