@@ -717,6 +717,7 @@ class ExecutionEngine:
                     accumulated_realized_pnl=Decimal("0.00"),
                     margin_blocked=order_margin,  # Store exact margin from order
                     created_at=datetime.now(pytz.timezone("Asia/Kolkata")),
+                    updated_at=datetime.now(pytz.timezone("Asia/Kolkata")),
                 )
                 db_session.add(position)
                 logger.info(

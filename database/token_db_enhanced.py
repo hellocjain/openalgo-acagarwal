@@ -19,11 +19,11 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Regex pattern to extract underlying from OpenAlgo symbol format
-# Format: [BaseSymbol][DDMMMYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY]FUT
-# Examples: NIFTY28MAR2420800CE, BANKNIFTY24APR24FUT, CRUDEOIL17APR246750CE
+# Format: [BaseSymbol][DDMMMYY|DDMMMYYYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY|DDMMMYYYY]FUT
+# Examples: NIFTY28MAR2420800CE, BANKNIFTY24APR24FUT, SILVER10031AUG2026FUT
 _UNDERLYING_PATTERN = re.compile(
     r"^(.+?)"  # Underlying (non-greedy capture)
-    r"(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})"  # Date: DDMMMYY
+    r"(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(?:\d{4}|\d{2}))"  # Date: DDMMMYY or DDMMMYYYY
     r"(?:\d+(?:\.\d+)?)?(?:FUT|CE|PE)?$",  # Optional strike + FUT/CE/PE
     re.IGNORECASE,
 )
@@ -32,10 +32,10 @@ _UNDERLYING_PATTERN = re.compile(
 # Indian F&O-style format (no dashes): BTC28FEB2580000CE / BTC28FEB25FUT
 # The underlying is the run of leading alpha characters before the first digit.
 # Perpetuals (BTCUSDT) have no embedded digit — handled separately via suffix stripping.
-# Anchored to expiry date pattern (DDMMMYY) so numeric-prefix underlyings like
+# Anchored to expiry date pattern (DDMMMYY/DDMMMYYYY) so numeric-prefix underlyings like
 # 1INCH28FEB25FUT are handled correctly. Non-greedy capture stops at first DDMMMYY match.
 _CRYPTO_UNDERLYING_PATTERN = re.compile(
-    r"^([A-Z0-9]+?)(?=\d{2}[A-Z]{3}\d{2})",
+    r"^([A-Z0-9]+?)(?=\d{2}[A-Z]{3}(?:\d{4}|\d{2}))",
     re.IGNORECASE,
 )
 

@@ -83,12 +83,12 @@ function parseSymbol(symbol: string, exchange: string) {
     return { underlying: symbol, expiry: null, strike: null, optionType: null }
   }
 
-  const futMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})FUT$/i)
+  const futMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}(?:\d{4}|\d{2}))FUT$/i)
   if (futMatch) {
     return { underlying: futMatch[1], expiry: futMatch[2], strike: null, optionType: 'FUT' }
   }
 
-  const optMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})(\d+\.?\d*)(CE|PE)$/i)
+  const optMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}(?:\d{4}|\d{2}))(\d+\.?\d*)(CE|PE)$/i)
   if (optMatch) {
     return {
       underlying: optMatch[1],

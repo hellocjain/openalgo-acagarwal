@@ -59,37 +59,35 @@ def parse_expiry_from_symbol(symbol, exchange):
     if exchange not in fo_exchanges:
         return None
 
-    # Pattern to extract date from symbol: DDMMMYY (e.g., 09DEC25, 31JUL25)
-    # This pattern looks for 2 digits + 3 letters (month) + 2 digits (year)
-    pattern = r"(\d{2})([A-Z]{3})(\d{2})"
+    # Pattern to extract date from symbol: DDMMMYY or DDMMMYYYY (e.g., 09DEC25, 31JUL25, 31AUG2026)
+    month_map = {
+        "JAN": 1,
+        "FEB": 2,
+        "MAR": 3,
+        "APR": 4,
+        "MAY": 5,
+        "JUN": 6,
+        "JUL": 7,
+        "AUG": 8,
+        "SEP": 9,
+        "OCT": 10,
+        "NOV": 11,
+        "DEC": 12,
+    }
+    months_re = "|".join(month_map.keys())
+    pattern = rf"(\d{{1,2}})({months_re})(\d{{4}}|\d{{2}})"
 
-    match = re.search(pattern, symbol)
+    match = re.search(pattern, symbol, re.IGNORECASE)
     if not match:
         return None
 
     try:
         day = int(match.group(1))
-        month_str = match.group(2)
-        year_short = int(match.group(3))
+        month_str = match.group(2).upper()
+        year_raw = int(match.group(3))
 
-        # Convert 2-digit year to 4-digit (assuming 20xx)
-        year = 2000 + year_short
-
-        # Parse month
-        month_map = {
-            "JAN": 1,
-            "FEB": 2,
-            "MAR": 3,
-            "APR": 4,
-            "MAY": 5,
-            "JUN": 6,
-            "JUL": 7,
-            "AUG": 8,
-            "SEP": 9,
-            "OCT": 10,
-            "NOV": 11,
-            "DEC": 12,
-        }
+        # Convert 2-digit year to 4-digit (assuming 20xx) if needed
+        year = year_raw if year_raw >= 1000 else (2000 + year_raw)
 
         month = month_map.get(month_str)
         if not month:
