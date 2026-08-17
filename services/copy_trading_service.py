@@ -523,6 +523,13 @@ def execute_order_for_single_account(
     placed_orders = []
     from broker.acagarwal.api.order_api import place_order_api
 
+    from database.settings_db import get_analyze_mode
+    is_sandbox = False
+    try:
+        is_sandbox = get_analyze_mode()
+    except Exception:
+        pass
+
     for idx, chunk_qty in enumerate(qty_slices):
         if idx > 0:
             time.sleep(0.15)  # Avoid rapid rate limits between slices for the same account
@@ -538,6 +545,30 @@ def execute_order_for_single_account(
             "trigger_price": str(trigger_price) if trigger_price else "0",
             "disclosed_quantity": "0",
         }
+
+        # 🎯 SANDBOX / SIMULATION MODE SUPPORT
+        if is_sandbox:
+            sandbox_order_id = f"SBX_{int(time.time()*1000)}_{account_id}_{idx}"
+            placed_orders.append(sandbox_order_id)
+            latency_ms = (time.time() - start_time) * 1000
+            record_copy_order(
+                account_id=account_id,
+                symbol=symbol,
+                exchange=exchange,
+                action=action,
+                quantity=chunk_qty,
+                price=price,
+                pricetype=pricetype,
+                product=product,
+                master_order_id=master_order_id,
+                child_order_id=sandbox_order_id,
+                strategy=order_data.get("strategy"),
+                status="placed",
+                message="[Sandbox] Paper trade executed successfully",
+                latency_ms=latency_ms,
+            )
+            logger.info(f"[Sandbox Copy Trading] Simulated {action} {chunk_qty} {symbol} for {account_name} ({client_code}) - ID: {sandbox_order_id}")
+            continue
 
         try:
             resp, resp_data, child_order_id = place_order_api(child_order_payload, auth=token)
