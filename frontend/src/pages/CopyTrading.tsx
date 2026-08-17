@@ -258,6 +258,13 @@ export default function CopyTrading() {
   const [squareoffLoading, setSquareoffLoading] = useState<boolean>(false)
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  // TradingView JSON Generator Modal State
+  const [selectedStrategyForJson, setSelectedStrategyForJson] = useState<Strategy | null>(null)
+  const [isJsonModalOpen, setIsJsonModalOpen] = useState<boolean>(false)
+  const [jsonAlertMode, setJsonAlertMode] = useState<'strategy' | 'indicator'>('strategy')
+  const [copiedWebhook, setCopiedWebhook] = useState<boolean>(false)
+  const [copiedPayload, setCopiedPayload] = useState<boolean>(false)
+
   const showStatus = (type: 'success' | 'error', text: string) => {
     setStatusMessage({ type, text })
     setTimeout(() => setStatusMessage(null), 5000)
@@ -953,8 +960,16 @@ export default function CopyTrading() {
                 </CardContent>
                 <CardFooter className="pt-2 border-t flex items-center justify-between text-xs">
                   <span className="text-muted-foreground font-mono">tag: "{strat.strategy_tag}"</span>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => alert(`TradingView Webhook Payload for ${strat.strategy_tag}:\n\n{\n  "strategy": "${strat.strategy_tag}",\n  "symbol": "${strat.default_symbol}",\n  "exchange": "${strat.segment}",\n  "action": "BUY",\n  "quantity": 100,\n  "pricetype": "MARKET",\n  "product": "MIS"\n}`)}>
-                    <Code2 className="h-3 w-3" /> View JSON
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-blue-600 dark:text-blue-400"
+                    onClick={() => {
+                      setSelectedStrategyForJson(strat)
+                      setIsJsonModalOpen(true)
+                    }}
+                  >
+                    <Code2 className="h-3.5 w-3.5" /> View TV JSON
                   </Button>
                 </CardFooter>
               </Card>
@@ -1567,23 +1582,29 @@ export default function CopyTrading() {
                   </Select>
                 </div>
 
-                <div className="space-y-1">
-                  <Label>Timeframe</Label>
-                  <Select
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label>Timeframe</Label>
+                    <span className="text-[10px] text-muted-foreground">Type or click pill</span>
+                  </div>
+                  <Input
+                    required
+                    placeholder="e.g. 10m, 30m, 1h, Daily"
                     value={strategyFormData.timeframe}
-                    onValueChange={(val) => setStrategyFormData({ ...strategyFormData, timeframe: val })}
-                  >
-                    <SelectTrigger className="text-xs">
-                      <SelectValue placeholder="Timeframe" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1m">1 Minute</SelectItem>
-                      <SelectItem value="5m">5 Minutes</SelectItem>
-                      <SelectItem value="15m">15 Minutes</SelectItem>
-                      <SelectItem value="1h">1 Hour</SelectItem>
-                      <SelectItem value="Daily">Daily</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    onChange={(e) => setStrategyFormData({ ...strategyFormData, timeframe: e.target.value })}
+                  />
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {['1m', '3m', '5m', '10m', '15m', '30m', '1h', '4h', 'Daily'].map((tf) => (
+                      <Badge
+                        key={tf}
+                        variant={strategyFormData.timeframe === tf ? 'default' : 'outline'}
+                        className="cursor-pointer text-[10px] px-1.5 py-0.5 hover:bg-primary/20 transition-colors"
+                        onClick={() => setStrategyFormData({ ...strategyFormData, timeframe: tf })}
+                      >
+                        {tf}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1591,7 +1612,7 @@ export default function CopyTrading() {
                 <Label>Default Symbol</Label>
                 <Input
                   required
-                  placeholder="e.g. CRUDEOIL, NIFTY, GOLD"
+                  placeholder="e.g. CRUDEOIL, NIFTY, GOLD, SILVERMIC"
                   value={strategyFormData.default_symbol}
                   onChange={(e) => setStrategyFormData({ ...strategyFormData, default_symbol: e.target.value.toUpperCase() })}
                 />
@@ -1607,6 +1628,145 @@ export default function CopyTrading() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* TradingView Webhook & JSON Generator Modal */}
+      <Dialog open={isJsonModalOpen} onOpenChange={setIsJsonModalOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Code2 className="h-5 w-5 text-blue-500" />
+              TradingView Alert Setup for {selectedStrategyForJson?.strategy_tag || 'Strategy'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Copy this exact JSON into your TradingView Alert Message box to trigger automated multi-client execution.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2 text-xs">
+            {/* Mode Switcher */}
+            <div className="flex items-center justify-between p-2 rounded-lg bg-muted/50 border">
+              <div>
+                <div className="font-semibold text-foreground">Alert Type</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {jsonAlertMode === 'strategy'
+                    ? 'Automated Pine Script Strategy (places smart orders with dynamic contracts)'
+                    : 'Study / Indicator Alert (explicit BUY or SELL signal)'}
+                </div>
+              </div>
+              <div className="flex gap-1 bg-background p-0.5 rounded-md border">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={jsonAlertMode === 'strategy' ? 'default' : 'ghost'}
+                  className="h-7 text-xs px-2.5"
+                  onClick={() => setJsonAlertMode('strategy')}
+                >
+                  ⚡ Strategy (Auto)
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={jsonAlertMode === 'indicator' ? 'default' : 'ghost'}
+                  className="h-7 text-xs px-2.5"
+                  onClick={() => setJsonAlertMode('indicator')}
+                >
+                  📌 Indicator (Fixed)
+                </Button>
+              </div>
+            </div>
+
+            {/* Webhook URL Box */}
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold">1. TradingView Webhook URL</Label>
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={`${window.location.protocol}//${window.location.host}/api/copy-trading/webhook`}
+                  className="font-mono text-xs bg-muted"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-1 text-xs"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.protocol}//${window.location.host}/api/copy-trading/webhook`)
+                    setCopiedWebhook(true)
+                    setTimeout(() => setCopiedWebhook(false), 2000)
+                  }}
+                >
+                  {copiedWebhook ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copiedWebhook ? 'Copied' : 'Copy URL'}
+                </Button>
+              </div>
+            </div>
+
+            {/* JSON Payload Box */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">2. Alert Message (JSON)</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[11px] gap-1 text-blue-600 hover:text-blue-700"
+                  onClick={() => {
+                    const payload = jsonAlertMode === 'strategy'
+                      ? JSON.stringify({
+                          strategy: selectedStrategyForJson?.strategy_tag || 'STRATEGY_TAG',
+                          symbol: "{{ticker}}",
+                          exchange: selectedStrategyForJson?.segment || 'MCXFO',
+                          action: "{{strategy.order.action}}",
+                          quantity: "{{strategy.order.contracts}}",
+                          position_size: "{{strategy.position_size}}",
+                          price: "{{close}}",
+                          pricetype: "MARKET",
+                          product: "MIS"
+                        }, null, 2)
+                      : JSON.stringify({
+                          strategy: selectedStrategyForJson?.strategy_tag || 'STRATEGY_TAG',
+                          symbol: selectedStrategyForJson?.default_symbol || 'CRUDEOIL',
+                          exchange: selectedStrategyForJson?.segment || 'MCXFO',
+                          action: "BUY",
+                          quantity: 100,
+                          pricetype: "MARKET",
+                          product: "MIS"
+                        }, null, 2)
+                    navigator.clipboard.writeText(payload)
+                    setCopiedPayload(true)
+                    setTimeout(() => setCopiedPayload(false), 2000)
+                  }}
+                >
+                  {copiedPayload ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copiedPayload ? 'Copied JSON!' : 'Copy JSON'}
+                </Button>
+              </div>
+              <pre className="p-3 bg-zinc-950 text-zinc-100 rounded-lg font-mono text-[11px] overflow-x-auto leading-relaxed border border-zinc-800">
+                {jsonAlertMode === 'strategy'
+                  ? `{\n  "strategy": "${selectedStrategyForJson?.strategy_tag || 'STRATEGY_TAG'}",\n  "symbol": "{{ticker}}",\n  "exchange": "${selectedStrategyForJson?.segment || 'MCXFO'}",\n  "action": "{{strategy.order.action}}",\n  "quantity": {{strategy.order.contracts}},\n  "position_size": {{strategy.position_size}},\n  "price": {{close}},\n  "pricetype": "MARKET",\n  "product": "MIS"\n}`
+                  : `{\n  "strategy": "${selectedStrategyForJson?.strategy_tag || 'STRATEGY_TAG'}",\n  "symbol": "${selectedStrategyForJson?.default_symbol || 'CRUDEOIL'}",\n  "exchange": "${selectedStrategyForJson?.segment || 'MCXFO'}",\n  "action": "BUY",\n  "quantity": 100,\n  "pricetype": "MARKET",\n  "product": "MIS"\n}`}
+              </pre>
+            </div>
+
+            {/* Quick Tips */}
+            <div className="p-2.5 rounded bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 text-[11px] text-muted-foreground space-y-1">
+              <div className="font-semibold text-foreground flex items-center gap-1">
+                <Sparkles className="h-3.5 w-3.5 text-blue-500" />
+                How Multi-Client Replication Works:
+              </div>
+              <p>
+                When this webhook is triggered by TradingView, OpenAlgo matches the tag <code>"{selectedStrategyForJson?.strategy_tag}"</code>, looks up all subscribed client accounts, multiplies the lot quantity according to each client's individual multiplier, and fires orders in parallel!
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button type="button" size="sm" onClick={() => setIsJsonModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
