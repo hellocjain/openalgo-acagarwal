@@ -112,6 +112,7 @@ class CopyAccount(Base):
 
     # Relationships
     orders = relationship("CopyOrder", back_populates="account", cascade="all, delete-orphan")
+    strategy_mappings = relationship("ClientStrategyMapping", back_populates="account", cascade="all, delete-orphan")
 
     def set_api_key(self, key: str):
         self.api_key_encrypted = encrypt_val(key)
@@ -233,6 +234,93 @@ class CopyActivityLog(Base):
     details = Column(Text, nullable=True)
     status = Column(String(50), default="success")
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class CopyStrategy(Base):
+    """Trading strategy definition for multi-strategy routing."""
+
+    __tablename__ = "copy_strategies"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_tag = Column(String(100), unique=True, nullable=False, index=True)  # e.g., CRUDE_1M_SCALP
+    strategy_name = Column(String(150), nullable=False)
+    segment = Column(String(30), default="MCXFO", nullable=False)  # MCXFO | NSEFO | NSECM
+    timeframe = Column(String(20), default="1m", nullable=False)  # 1m | 5m | 15m | 1h | Daily
+    default_symbol = Column(String(50), default="CRUDEOIL", nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    mappings = relationship("ClientStrategyMapping", back_populates="strategy", cascade="all, delete-orphan")
+
+    def to_dict(self, include_subscribers: bool = False) -> Dict[str, Any]:
+        data = {
+            "id": self.id,
+            "strategy_tag": self.strategy_tag,
+            "strategy_name": self.strategy_name,
+            "segment": self.segment,
+            "timeframe": self.timeframe,
+            "default_symbol": self.default_symbol,
+            "description": self.description,
+            "is_active": self.is_active,
+            "subscribers_count": len(self.mappings) if self.mappings else 0,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_subscribers and self.mappings:
+            data["subscribers"] = [m.to_dict() for m in self.mappings]
+        return data
+
+
+class ClientStrategyMapping(Base):
+    """Relational mapping between child trading accounts and strategies."""
+
+    __tablename__ = "client_strategy_mappings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    account_id = Column(Integer, ForeignKey("copy_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_id = Column(Integer, ForeignKey("copy_strategies.id", ondelete="CASCADE"), nullable=False, index=True)
+    multiplier = Column(Float, default=1.0, nullable=False)
+    fixed_qty = Column(Integer, default=0, nullable=False)
+    max_daily_loss = Column(Float, default=5000.0, nullable=False)
+    daily_pnl = Column(Float, default=0.0)
+    is_active = Column(Boolean, default=True, index=True)
+    daily_loss_triggered = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = relationship("CopyAccount", back_populates="strategy_mappings")
+    strategy = relationship("CopyStrategy", back_populates="mappings")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "account_id": self.account_id,
+            "account_name": self.account.account_name if self.account else None,
+            "client_code": self.account.client_code if self.account else None,
+            "strategy_id": self.strategy_id,
+            "strategy_tag": self.strategy.strategy_tag if self.strategy else None,
+            "strategy_name": self.strategy.strategy_name if self.strategy else None,
+            "multiplier": self.multiplier,
+            "fixed_qty": self.fixed_qty,
+            "max_daily_loss": self.max_daily_loss,
+            "daily_pnl": self.daily_pnl,
+            "is_active": self.is_active,
+            "daily_loss_triggered": self.daily_loss_triggered,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class CopyGlobalSetting(Base):
+    """Global key-value settings store for copy trading."""
+
+    __tablename__ = "copy_global_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), unique=True, nullable=False, index=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 def init_copy_trading_db():
@@ -517,5 +605,440 @@ def get_copy_orders(limit: int = 100, account_id: Optional[int] = None) -> List[
     except Exception as e:
         logger.error(f"Error getting copy orders: {e}")
         return []
+    finally:
+        session.close()
+
+
+# =====================================================================
+# Master Switch & Global Settings
+# =====================================================================
+
+def get_master_switch() -> bool:
+    """Check if the global master copy trading switch is ACTIVE."""
+    session = Session()
+    try:
+        setting = session.query(CopyGlobalSetting).filter_by(key="copy_trading_master_active").first()
+        if setting:
+            return setting.value.strip().lower() == "true"
+        return True  # Default to active
+    except Exception as e:
+        logger.error(f"Error reading master switch: {e}")
+        return True
+    finally:
+        session.close()
+
+
+def set_master_switch(is_active: bool) -> bool:
+    """Set the global master copy trading switch state."""
+    session = Session()
+    try:
+        setting = session.query(CopyGlobalSetting).filter_by(key="copy_trading_master_active").first()
+        if not setting:
+            setting = CopyGlobalSetting(key="copy_trading_master_active", value=str(is_active).lower())
+            session.add(setting)
+        else:
+            setting.value = str(is_active).lower()
+            setting.updated_at = datetime.utcnow()
+        session.commit()
+        return is_active
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error setting master switch: {e}")
+        return False
+    finally:
+        session.close()
+
+
+# =====================================================================
+# Strategy Definition CRUD
+# =====================================================================
+
+def create_strategy(
+    strategy_tag: str,
+    strategy_name: str,
+    segment: str = "MCXFO",
+    timeframe: str = "1m",
+    default_symbol: str = "CRUDEOIL",
+    description: Optional[str] = None,
+    is_active: bool = True,
+) -> Dict[str, Any]:
+    """Create a new copy trading strategy definition."""
+    session = Session()
+    try:
+        clean_tag = strategy_tag.strip().upper().replace(" ", "_")
+        existing = session.query(CopyStrategy).filter_by(strategy_tag=clean_tag).first()
+        if existing:
+            return {"status": "error", "message": f"Strategy with tag '{clean_tag}' already exists"}
+
+        strat = CopyStrategy(
+            strategy_tag=clean_tag,
+            strategy_name=strategy_name.strip(),
+            segment=segment.strip().upper(),
+            timeframe=timeframe.strip(),
+            default_symbol=default_symbol.strip().upper(),
+            description=description.strip() if description else None,
+            is_active=bool(is_active),
+        )
+        session.add(strat)
+        session.commit()
+        logger.info(f"Strategy '{strat.strategy_name}' [{strat.strategy_tag}] created successfully.")
+        return {"status": "success", "message": "Strategy created successfully", "data": strat.to_dict()}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error creating strategy: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def get_all_strategies(include_subscribers: bool = True) -> List[Dict[str, Any]]:
+    """Retrieve all defined strategies with subscriber counts."""
+    session = Session()
+    try:
+        strategies = session.query(CopyStrategy).order_by(CopyStrategy.id.asc()).all()
+        results = []
+        for s in strategies:
+            data = s.to_dict(include_subscribers=include_subscribers)
+            # Calculate aggregate strategy PnL across active mapped clients
+            strat_pnl = 0.0
+            if s.mappings:
+                for m in s.mappings:
+                    if m.account and m.account.is_active and m.is_active:
+                        strat_pnl += float(m.daily_pnl or 0.0)
+            data["total_strategy_pnl"] = round(strat_pnl, 2)
+            results.append(data)
+        return results
+    except Exception as e:
+        logger.error(f"Error retrieving strategies: {e}")
+        return []
+    finally:
+        session.close()
+
+
+def get_strategy_by_id(strategy_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve single strategy by ID."""
+    session = Session()
+    try:
+        strat = session.query(CopyStrategy).filter_by(id=strategy_id).first()
+        if strat:
+            return strat.to_dict(include_subscribers=True)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting strategy {strategy_id}: {e}")
+        return None
+    finally:
+        session.close()
+
+
+def get_strategy_by_tag(strategy_tag: str) -> Optional[Dict[str, Any]]:
+    """Retrieve single strategy by tag."""
+    session = Session()
+    try:
+        clean_tag = strategy_tag.strip().upper().replace(" ", "_")
+        strat = session.query(CopyStrategy).filter_by(strategy_tag=clean_tag).first()
+        if strat:
+            return strat.to_dict(include_subscribers=True)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting strategy tag {strategy_tag}: {e}")
+        return None
+    finally:
+        session.close()
+
+
+def update_strategy(
+    strategy_id: int,
+    strategy_name: Optional[str] = None,
+    segment: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    default_symbol: Optional[str] = None,
+    description: Optional[str] = None,
+    is_active: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Update strategy metadata."""
+    session = Session()
+    try:
+        strat = session.query(CopyStrategy).filter_by(id=strategy_id).first()
+        if not strat:
+            return {"status": "error", "message": "Strategy not found"}
+
+        if strategy_name is not None:
+            strat.strategy_name = strategy_name.strip()
+        if segment is not None:
+            strat.segment = segment.strip().upper()
+        if timeframe is not None:
+            strat.timeframe = timeframe.strip()
+        if default_symbol is not None:
+            strat.default_symbol = default_symbol.strip().upper()
+        if description is not None:
+            strat.description = description.strip()
+        if is_active is not None:
+            strat.is_active = bool(is_active)
+
+        strat.updated_at = datetime.utcnow()
+        session.commit()
+        return {"status": "success", "message": "Strategy updated successfully", "data": strat.to_dict()}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating strategy {strategy_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def delete_strategy(strategy_id: int) -> Dict[str, Any]:
+    """Delete a strategy and all its client mappings."""
+    session = Session()
+    try:
+        strat = session.query(CopyStrategy).filter_by(id=strategy_id).first()
+        if not strat:
+            return {"status": "error", "message": "Strategy not found"}
+
+        session.delete(strat)
+        session.commit()
+        return {"status": "success", "message": "Strategy deleted successfully"}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting strategy {strategy_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+# =====================================================================
+# Client Strategy Mappings CRUD
+# =====================================================================
+
+def assign_strategy_to_account(
+    account_id: int,
+    strategy_id: int,
+    multiplier: float = 1.0,
+    fixed_qty: int = 0,
+    max_daily_loss: float = 5000.0,
+    is_active: bool = True,
+) -> Dict[str, Any]:
+    """Assign a trading account to a strategy with custom multiplier and risk limits."""
+    session = Session()
+    try:
+        # Check existing mapping
+        existing = session.query(ClientStrategyMapping).filter_by(
+            account_id=account_id, strategy_id=strategy_id
+        ).first()
+
+        # Multiplier sanity bound: 0.1x to 10.0x
+        safe_multiplier = max(0.1, min(10.0, float(multiplier)))
+
+        if existing:
+            existing.multiplier = safe_multiplier
+            existing.fixed_qty = int(fixed_qty)
+            existing.max_daily_loss = float(max_daily_loss)
+            existing.is_active = bool(is_active)
+            existing.updated_at = datetime.utcnow()
+            session.commit()
+            return {"status": "success", "message": "Mapping updated successfully", "data": existing.to_dict()}
+
+        mapping = ClientStrategyMapping(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            multiplier=safe_multiplier,
+            fixed_qty=int(fixed_qty),
+            max_daily_loss=float(max_daily_loss),
+            is_active=bool(is_active),
+        )
+        session.add(mapping)
+        session.commit()
+        return {"status": "success", "message": "Strategy assigned to account successfully", "data": mapping.to_dict()}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error assigning strategy {strategy_id} to account {account_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def get_account_strategies(account_id: int) -> List[Dict[str, Any]]:
+    """Get all strategies assigned to a specific client account."""
+    session = Session()
+    try:
+        mappings = session.query(ClientStrategyMapping).filter_by(account_id=account_id).all()
+        return [m.to_dict() for m in mappings]
+    except Exception as e:
+        logger.error(f"Error getting strategies for account {account_id}: {e}")
+        return []
+    finally:
+        session.close()
+
+
+def update_client_strategy_mapping(
+    mapping_id: int,
+    multiplier: Optional[float] = None,
+    fixed_qty: Optional[int] = None,
+    max_daily_loss: Optional[float] = None,
+    is_active: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Update mapping parameters for a client-strategy subscription."""
+    session = Session()
+    try:
+        mapping = session.query(ClientStrategyMapping).filter_by(id=mapping_id).first()
+        if not mapping:
+            return {"status": "error", "message": "Mapping not found"}
+
+        if multiplier is not None:
+            mapping.multiplier = max(0.1, min(10.0, float(multiplier)))
+        if fixed_qty is not None:
+            mapping.fixed_qty = int(fixed_qty)
+        if max_daily_loss is not None:
+            mapping.max_daily_loss = float(max_daily_loss)
+        if is_active is not None:
+            mapping.is_active = bool(is_active)
+
+        mapping.updated_at = datetime.utcnow()
+        session.commit()
+        return {"status": "success", "message": "Mapping updated", "data": mapping.to_dict()}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error updating mapping {mapping_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def toggle_client_strategy_mapping(mapping_id: int, is_active: Optional[bool] = None) -> Dict[str, Any]:
+    """Toggle active status for a specific client-strategy mapping."""
+    session = Session()
+    try:
+        mapping = session.query(ClientStrategyMapping).filter_by(id=mapping_id).first()
+        if not mapping:
+            return {"status": "error", "message": "Mapping not found"}
+
+        if is_active is not None:
+            mapping.is_active = is_active
+        else:
+            mapping.is_active = not mapping.is_active
+
+        session.commit()
+        return {"status": "success", "message": "Status updated", "is_active": mapping.is_active}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error toggling mapping {mapping_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def delete_client_strategy_mapping(mapping_id: int) -> Dict[str, Any]:
+    """Remove a strategy assignment from an account."""
+    session = Session()
+    try:
+        mapping = session.query(ClientStrategyMapping).filter_by(id=mapping_id).first()
+        if not mapping:
+            return {"status": "error", "message": "Mapping not found"}
+
+        session.delete(mapping)
+        session.commit()
+        return {"status": "success", "message": "Strategy assignment removed"}
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error deleting mapping {mapping_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def get_active_subscribers_for_strategy_tag(strategy_tag: str) -> List[Dict[str, Any]]:
+    """Retrieve all active accounts mapped to a specific strategy tag with their custom multipliers."""
+    session = Session()
+    try:
+        clean_tag = strategy_tag.strip().upper().replace(" ", "_")
+        strat = session.query(CopyStrategy).filter_by(strategy_tag=clean_tag, is_active=True).first()
+        if not strat:
+            return []
+
+        mappings = session.query(ClientStrategyMapping).filter_by(
+            strategy_id=strat.id, is_active=True, daily_loss_triggered=False
+        ).all()
+
+        subscribers = []
+        for m in mappings:
+            acc = m.account
+            if acc and acc.is_active and not acc.daily_loss_triggered:
+                acc_dict = acc.to_dict(include_secrets=True)
+                acc_dict["strategy_multiplier"] = m.multiplier
+                acc_dict["strategy_fixed_qty"] = m.fixed_qty
+                acc_dict["strategy_max_daily_loss"] = m.max_daily_loss
+                acc_dict["mapping_id"] = m.id
+                subscribers.append(acc_dict)
+        return subscribers
+    except Exception as e:
+        logger.error(f"Error getting subscribers for strategy tag '{strategy_tag}': {e}")
+        return []
+    finally:
+        session.close()
+
+
+# =====================================================================
+# Pre-Market Readiness & Telemetry
+# =====================================================================
+
+def get_premarket_readiness_summary() -> Dict[str, Any]:
+    """Calculate pre-market readiness indicators across all 100+ accounts."""
+    session = Session()
+    try:
+        accounts = session.query(CopyAccount).all()
+        total = len(accounts)
+        ready = 0
+        need_login = 0
+        low_margin = 0
+
+        for a in accounts:
+            if not a.is_active:
+                continue
+            is_connected = a.connection_status == "connected" and a.get_auth_token() is not None
+            has_funds = (a.last_funds or 0.0) >= 10000.0  # Alert if margin < 10,000
+
+            if not is_connected:
+                need_login += 1
+            elif not has_funds:
+                low_margin += 1
+            else:
+                ready += 1
+
+        return {
+            "total_accounts": total,
+            "ready_count": ready,
+            "need_login_count": need_login,
+            "low_margin_count": low_margin,
+            "master_switch_active": get_master_switch(),
+        }
+    except Exception as e:
+        logger.error(f"Error computing premarket readiness: {e}")
+        return {
+            "total_accounts": 0,
+            "ready_count": 0,
+            "need_login_count": 0,
+            "low_margin_count": 0,
+            "master_switch_active": True,
+        }
+    finally:
+        session.close()
+
+
+def export_client_trade_logs_csv(account_id: int) -> str:
+    """Generate CSV text of all executed orders for a specific client account."""
+    session = Session()
+    try:
+        orders = session.query(CopyOrder).filter_by(account_id=account_id).order_by(CopyOrder.created_at.desc()).all()
+        lines = ["ID,Time,Client Code,Strategy,Symbol,Exchange,Action,Quantity,Price,Order Type,Product,Status,Latency(ms),Message"]
+        for o in orders:
+            acc_code = o.account.client_code if o.account else ""
+            time_str = o.created_at.strftime("%Y-%m-%d %H:%M:%S") if o.created_at else ""
+            clean_msg = (o.message or "").replace(",", " ")
+            lines.append(
+                f"{o.id},{time_str},{acc_code},{o.strategy or ''},{o.symbol},{o.exchange},{o.action},{o.quantity},{o.price or 0.0},{o.pricetype},{o.product},{o.status},{o.execution_latency_ms:.1f},{clean_msg}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Error generating CSV for account {account_id}: {e}")
+        return "ID,Error\n0,Failed to export orders"
     finally:
         session.close()

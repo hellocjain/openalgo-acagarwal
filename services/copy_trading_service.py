@@ -1,11 +1,14 @@
 """
 High-Speed In-Process Copy-Trading Dispatcher Service for OpenAlgo + AC Agarwal (Symphony XTS).
-Reuses battle-tested parallel execution patterns from Algomirror to replicate master orders
-across all active child accounts concurrently within 15-30 milliseconds.
+Reuses battle-tested parallel execution patterns from Marketcalls/Algomirror to replicate master
+and TradingView strategy orders across all 100+ active child accounts concurrently within 15-30ms.
 """
 
 import concurrent.futures
+import hashlib
+import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,8 +18,10 @@ from broker.acagarwal.baseurl import INTERACTIVE_URL
 from database.copy_trading_db import (
     CopyAccount,
     Session,
+    get_active_subscribers_for_strategy_tag,
     get_all_child_accounts,
     get_child_account,
+    get_master_switch,
     record_copy_order,
     update_account_status,
 )
@@ -28,6 +33,46 @@ logger = get_logger(__name__)
 # Active in-memory session token cache: {account_id: {"token": str, "timestamp": float}}
 _TOKEN_CACHE: Dict[int, Dict[str, Any]] = {}
 TOKEN_CACHE_TTL = 14400  # 4 hours
+
+# 3-Second SHA-256 Idempotency Cache: {hash: timestamp}
+_DEDUPE_CACHE: Dict[str, float] = {}
+DEDUPE_WINDOW_SEC = 3.0
+
+# Plain-English Signal Feed circular buffer (stores latest 50 formatted execution summaries)
+_PLAIN_ENGLISH_FEED = deque(maxlen=50)
+
+
+def get_plain_english_feed() -> List[Dict[str, Any]]:
+    """Retrieve the latest plain-English signal execution cards."""
+    return list(_PLAIN_ENGLISH_FEED)
+
+
+def _compute_signal_hash(order_data: Dict[str, Any]) -> str:
+    """Compute SHA-256 fingerprint bucketed to 3-second time windows."""
+    strategy = str(order_data.get("strategy") or "").upper().strip()
+    symbol = str(order_data.get("symbol") or "").upper().strip()
+    action = str(order_data.get("action") or "").upper().strip()
+    price = str(order_data.get("price") or "0")
+    pricetype = str(order_data.get("pricetype") or "MARKET").upper().strip()
+    # 3-second bucket
+    bucket = int(time.time() // DEDUPE_WINDOW_SEC)
+    raw = f"{strategy}:{symbol}:{action}:{pricetype}:{price}:{bucket}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def is_duplicate_signal(order_data: Dict[str, Any]) -> bool:
+    """Check if signal is a duplicate within the 3-second idempotency window."""
+    now = time.time()
+    # Clean expired hashes
+    expired = [h for h, t in _DEDUPE_CACHE.items() if now - t > DEDUPE_WINDOW_SEC]
+    for h in expired:
+        _DEDUPE_CACHE.pop(h, None)
+
+    sig_hash = _compute_signal_hash(order_data)
+    if sig_hash in _DEDUPE_CACHE:
+        return True
+    _DEDUPE_CACHE[sig_hash] = now
+    return False
 
 
 def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -43,14 +88,13 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
     if not api_key or not api_secret:
         return False, None, "Missing API Key or Secret"
 
-    # Check in-memory cache
     now = time.time()
     if account_id in _TOKEN_CACHE:
         cached = _TOKEN_CACHE[account_id]
         if now - cached.get("timestamp", 0) < TOKEN_CACHE_TTL and cached.get("token"):
             return True, cached["token"], None
 
-    # Check DB stored token
+    # DB stored token
     db_token = account.get("auth_token")
     if db_token:
         _TOKEN_CACHE[account_id] = {"token": db_token, "timestamp": now}
@@ -86,51 +130,42 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
         return False, None, err_msg
 
 
-def calculate_child_quantity(
-    account: Dict[str, Any],
-    master_qty: int,
-    lot_size: int = 1,
-    master_funds: float = 0.0,
-) -> int:
-    """
-    Calculate target lot size and quantity for a child account based on its sizing mode.
-    """
-    lot_size = max(1, lot_size)
-    mode = account.get("sizing_mode", "MULTIPLIER")
-    multiplier = float(account.get("multiplier", 1.0))
-    fixed_qty = int(account.get("fixed_qty", 0))
-    max_lot_cap = int(account.get("max_lot_cap", 50))
-    max_qty_cap = max_lot_cap * lot_size
+def normalize_exchange_segment(exchange: str, symbol: str) -> str:
+    """Normalize exchange and segment string for AC Agarwal Symphony XTS."""
+    ex = (exchange or "").upper().strip()
+    sym = (symbol or "").upper().strip()
 
-    target_qty = master_qty
+    if "MCX" in ex or sym.startswith("CRUDE") or sym.startswith("GOLD") or sym.startswith("SILVER") or sym.startswith("NATURAL"):
+        return "MCXFO"
+    if ex in ["NFO", "NSEFO", "NSE_FO"]:
+        return "NSEFO"
+    if ex in ["NSE", "NSECM", "NSE_CM"]:
+        return "NSECM"
+    if ex in ["BSE", "BSECM", "BSE_CM"]:
+        return "BSECM"
+    return ex or "NSEFO"
 
-    if mode == "FIXED_LOTS" and fixed_qty > 0:
-        target_qty = fixed_qty
-    elif mode == "CAPITAL_RATIO" and master_funds > 0:
-        child_funds = float(account.get("last_funds", 0.0))
-        if child_funds > 0:
-            ratio = child_funds / master_funds
-            raw_qty = master_qty * ratio
-            # Round to nearest lot
-            target_qty = max(lot_size, int(round(raw_qty / lot_size) * lot_size))
-        else:
-            target_qty = int(round(master_qty * multiplier))
-    else:  # MULTIPLIER (default)
-        raw_qty = master_qty * multiplier
-        target_qty = max(lot_size, int(round(raw_qty / lot_size) * lot_size))
 
-    # Apply safety lot cap
-    if max_qty_cap > 0 and target_qty > max_qty_cap:
-        target_qty = max_qty_cap
-
-    return max(1, target_qty)
+def get_commodity_freeze_qty(symbol: str) -> Optional[int]:
+    """Return default freeze quantities for major MCX commodities."""
+    sym = symbol.upper()
+    if sym.startswith("CRUDEOIL"):
+        return 10000  # 100 lots / 10,000 barrels
+    if sym.startswith("GOLD"):
+        return 10000  # 10 kg
+    if sym.startswith("SILVER"):
+        return 30000  # 30 kg
+    if sym.startswith("NATURALGAS"):
+        return 10000  # 10,000 mmBtu
+    return None
 
 
 def slice_order_quantities(quantity: int, symbol: str, exchange: str) -> List[int]:
     """
     Slice quantity into multiple sub-orders if it exceeds the exchange freeze quantity limit.
+    Supports both NSE Options and MCX Commodity freeze bounds.
     """
-    freeze_qty = get_freeze_qty_for_option(symbol, exchange)
+    freeze_qty = get_commodity_freeze_qty(symbol) or get_freeze_qty_for_option(symbol, exchange)
     if not freeze_qty or freeze_qty <= 0 or quantity <= freeze_qty:
         return [quantity]
 
@@ -143,6 +178,54 @@ def slice_order_quantities(quantity: int, symbol: str, exchange: str) -> List[in
 
     logger.info(f"[Copy Trading] Sliced order for {symbol} ({quantity} qty) into {len(slices)} chunks: {slices}")
     return slices
+
+
+def calculate_child_quantity(
+    account: Dict[str, Any],
+    master_qty: int,
+    lot_size: int = 1,
+    master_funds: float = 0.0,
+) -> int:
+    """
+    Calculate target quantity for a child account based on per-strategy multiplier or account default.
+    """
+    lot_size = max(1, lot_size)
+
+    # Check if a strategy-specific multiplier or fixed qty was attached
+    if "strategy_multiplier" in account:
+        multiplier = float(account["strategy_multiplier"])
+        fixed_qty = int(account.get("strategy_fixed_qty", 0))
+        if fixed_qty > 0:
+            return fixed_qty
+        raw_qty = master_qty * multiplier
+        target_qty = max(lot_size, int(round(raw_qty / lot_size) * lot_size))
+        return max(1, target_qty)
+
+    # Fallback to account-level sizing mode
+    mode = account.get("sizing_mode", "MULTIPLIER")
+    multiplier = float(account.get("multiplier", 1.0))
+    fixed_qty = int(account.get("fixed_qty", 0))
+    max_lot_cap = int(account.get("max_lot_cap", 50))
+    max_qty_cap = max_lot_cap * lot_size
+
+    if mode == "FIXED_LOTS" and fixed_qty > 0:
+        target_qty = fixed_qty
+    elif mode == "CAPITAL_RATIO" and master_funds > 0:
+        child_funds = float(account.get("last_funds", 0.0))
+        if child_funds > 0:
+            ratio = child_funds / master_funds
+            raw_qty = master_qty * ratio
+            target_qty = max(lot_size, int(round(raw_qty / lot_size) * lot_size))
+        else:
+            target_qty = int(round(master_qty * multiplier))
+    else:  # MULTIPLIER (default)
+        raw_qty = master_qty * multiplier
+        target_qty = max(lot_size, int(round(raw_qty / lot_size) * lot_size))
+
+    if max_qty_cap > 0 and target_qty > max_qty_cap:
+        target_qty = max_qty_cap
+
+    return max(1, target_qty)
 
 
 def execute_order_for_single_account(
@@ -189,7 +272,8 @@ def execute_order_for_single_account(
     child_qty = calculate_child_quantity(account, base_qty, lot_size)
 
     symbol = order_data.get("symbol", "")
-    exchange = order_data.get("exchange", "")
+    raw_exchange = order_data.get("exchange", "")
+    exchange = normalize_exchange_segment(raw_exchange, symbol)
     action = order_data.get("action", "BUY").upper()
     pricetype = order_data.get("pricetype", "MARKET").upper()
     product = order_data.get("product", "MIS").upper()
@@ -292,18 +376,63 @@ def broadcast_copy_order(
     specific_account_ids: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     """
-    Broadcast a master trade signal to all active child accounts in parallel using ThreadPoolExecutor.
+    Broadcast a trade signal to all mapped child accounts in parallel using ThreadPoolExecutor.
+    Supports dynamic strategy routing and duplicate signal protection.
     """
+    # 1. Check Global Master Switch
+    if not get_master_switch():
+        logger.warning("[Copy Trading] Signal skipped - Master Copy Trading Switch is PAUSED.")
+        return {
+            "status": "paused",
+            "message": "Copy trading execution is globally paused via Master Switch",
+            "total_accounts": 0,
+            "successful_orders": 0,
+            "failed_orders": 0,
+            "total_latency_ms": 0.0,
+            "results": [],
+        }
+
+    # 2. Check 3-Second Deduplication Guard
+    if is_duplicate_signal(order_data):
+        logger.warning(f"[Copy Trading] Duplicate signal within 3-second window ignored: {order_data.get('symbol')}")
+        return {
+            "status": "skipped",
+            "message": "Duplicate signal within 3-second window ignored",
+            "total_accounts": 0,
+            "successful_orders": 0,
+            "failed_orders": 0,
+            "total_latency_ms": 0.0,
+            "results": [],
+        }
+
     t0 = time.time()
-    all_accounts = get_all_child_accounts(active_only=True, include_secrets=True)
+    strategy_tag = order_data.get("strategy")
+    target_accounts: List[Dict[str, Any]] = []
+
+    # 3. Dynamic Strategy Subscriber Lookup vs Global Fallback
+    if strategy_tag and strategy_tag.strip().upper() not in ["GLOBAL", "ALL"]:
+        target_accounts = get_active_subscribers_for_strategy_tag(strategy_tag)
+        if not target_accounts:
+            logger.info(f"[Copy Trading] No active clients subscribed to strategy tag '{strategy_tag}'")
+            return {
+                "status": "success",
+                "message": f"No active clients subscribed to strategy '{strategy_tag}'",
+                "results": [],
+                "total_accounts": 0,
+                "successful_orders": 0,
+                "failed_orders": 0,
+                "total_latency_ms": 0.0,
+            }
+    else:
+        target_accounts = get_all_child_accounts(active_only=True, include_secrets=True)
 
     if specific_account_ids:
-        all_accounts = [a for a in all_accounts if a["id"] in specific_account_ids]
+        target_accounts = [a for a in target_accounts if a["id"] in specific_account_ids]
 
-    if not all_accounts:
+    if not target_accounts:
         return {
             "status": "success",
-            "message": "No active child accounts configured for copy trading",
+            "message": "No active child accounts found for execution",
             "results": [],
             "total_accounts": 0,
             "successful_orders": 0,
@@ -311,18 +440,21 @@ def broadcast_copy_order(
             "total_latency_ms": 0.0,
         }
 
-    logger.info(f"[Copy Trading] Broadcasting order {order_data.get('symbol')} ({order_data.get('action')}) to {len(all_accounts)} accounts...")
+    logger.info(
+        f"[Copy Trading] Broadcasting {order_data.get('action')} {order_data.get('quantity')} {order_data.get('symbol')} "
+        f"[Strategy: {strategy_tag or 'GLOBAL'}] to {len(target_accounts)} accounts..."
+    )
 
     results = []
     successful = 0
     failed = 0
 
-    # Parallel Execution Pool: up to 50 concurrent worker threads
-    max_workers = min(50, len(all_accounts))
+    # 4. Parallel Dispatch with 50 Worker Pool
+    max_workers = min(50, len(target_accounts))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_acc = {
             executor.submit(execute_order_for_single_account, acc, order_data, master_order_id): acc
-            for acc in all_accounts
+            for acc in target_accounts
         }
         for future in concurrent.futures.as_completed(future_to_acc):
             res = future.result()
@@ -333,11 +465,29 @@ def broadcast_copy_order(
                 failed += 1
 
     total_latency_ms = (time.time() - t0) * 1000
-    logger.info(f"[Copy Trading] Broadcast complete in {total_latency_ms:.2f}ms: {successful} success, {failed} failed.")
+    strat_label = f"Strategy: {strategy_tag}" if strategy_tag else "Global"
+
+    # 5. Push to Plain-English Feed
+    now_time = datetime.now().strftime("%H:%M:%S")
+    feed_entry = {
+        "timestamp": now_time,
+        "type": "success" if successful > 0 else "error",
+        "action": order_data.get("action", "BUY").upper(),
+        "symbol": order_data.get("symbol", ""),
+        "strategy": strategy_tag or "Global Broadcast",
+        "total_clients": len(target_accounts),
+        "successful": successful,
+        "failed": failed,
+        "latency_ms": round(total_latency_ms, 1),
+        "text": f"Replicated {order_data.get('action', 'BUY').upper()} {order_data.get('quantity')} {order_data.get('symbol')} to {len(target_accounts)} Clients on [{strat_label}] in {total_latency_ms:.1f}ms ({successful} Placed, {failed} Failed)",
+    }
+    _PLAIN_ENGLISH_FEED.appendleft(feed_entry)
+
+    logger.info(f"[Copy Trading] {feed_entry['text']}")
 
     return {
         "status": "success",
-        "total_accounts": len(all_accounts),
+        "total_accounts": len(target_accounts),
         "successful_orders": successful,
         "failed_orders": failed,
         "total_latency_ms": round(total_latency_ms, 2),
@@ -346,35 +496,59 @@ def broadcast_copy_order(
 
 
 # ==============================================================================
-# Proactive Heartbeat & Order Reconciliation Daemon (from Algomirror)
+# Staggered Round-Robin Telemetry & Proactive Heartbeat (from Algomirror)
 # ==============================================================================
 _HEARTBEAT_RUNNING = False
 
 
 def _heartbeat_worker():
-    """Background heartbeat loop that pings accounts and auto-reconnects expired sessions."""
+    """
+    Background worker that syncs 10 accounts every 2 seconds in a staggered round-robin fashion,
+    preventing API rate-limits while keeping tokens, balances, and positions continuously fresh.
+    """
     global _HEARTBEAT_RUNNING
-    logger.info("[Copy Heartbeat] Background session monitor started.")
+    logger.info("[Copy Heartbeat] Staggered round-robin session & telemetry monitor started.")
+    account_index = 0
+
     while _HEARTBEAT_RUNNING:
         try:
             accounts = get_all_child_accounts(active_only=True, include_secrets=True)
-            for acc in accounts:
-                try:
-                    get_or_refresh_child_token(acc)
-                except Exception as ex:
-                    logger.error(f"[Copy Heartbeat] Error pinging account {acc.get('account_name')}: {ex}")
-        except Exception as e:
-            logger.error(f"[Copy Heartbeat] Monitor loop exception: {e}")
+            if accounts:
+                total_acc = len(accounts)
+                # Take next batch of 10 accounts
+                batch_size = min(10, total_acc)
+                batch = [accounts[(account_index + i) % total_acc] for i in range(batch_size)]
+                account_index = (account_index + batch_size) % total_acc
 
-        # Sleep for 60 seconds between ping cycles
-        time.sleep(60)
+                for acc in batch:
+                    try:
+                        # 1. Ping / Token Refresh
+                        get_or_refresh_child_token(acc)
+
+                        # 2. Fetch Balance & Update DB Cache
+                        token = _TOKEN_CACHE.get(acc["id"], {}).get("token") or acc.get("auth_token")
+                        if token:
+                            b_url = f"{INTERACTIVE_URL}/user/balance"
+                            headers = {"Authorization": token}
+                            b_resp = requests.get(b_url, headers=headers, timeout=3)
+                            if b_resp.status_code == 200:
+                                b_data = b_resp.json()
+                                res = b_data.get("result", {})
+                                funds = float(res.get("availableBalance", res.get("cash", 0.0)))
+                                update_account_status(acc["id"], "connected", funds=funds)
+                    except Exception as ex:
+                        logger.debug(f"[Copy Heartbeat] Staggered sync for account {acc.get('client_code')}: {ex}")
+        except Exception as e:
+            logger.error(f"[Copy Heartbeat] Monitor loop error: {e}")
+
+        # Staggered interval: 2 seconds between 10-account batches
+        time.sleep(2)
 
 
 def start_copy_trading_heartbeat():
-    """Start the proactive heartbeat monitor thread if not already running."""
+    """Start the proactive heartbeat & telemetry monitor thread if not already running."""
     global _HEARTBEAT_RUNNING
     if not _HEARTBEAT_RUNNING:
-        import threading
         _HEARTBEAT_RUNNING = True
         t = threading.Thread(target=_heartbeat_worker, daemon=True, name="CopyTradingHeartbeat")
         t.start()

@@ -1,11 +1,28 @@
 import {
+  Activity,
+  AlertCircle,
   AlertTriangle,
   CheckCircle2,
+  Clock,
+  Code2,
   Copy,
+  Download,
+  Flame,
+  Layers,
   Plus,
+  Power,
   RefreshCw,
+  Search,
+  Shield,
+  Sliders,
+  Sparkles,
+  StopCircle,
   Trash2,
+  TrendingDown,
+  TrendingUp,
+  UserPlus,
   Users,
+  X,
   XCircle,
   Zap,
 } from 'lucide-react'
@@ -16,6 +33,7 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
@@ -52,6 +70,43 @@ interface AccountSummary {
   active_accounts: number
   total_funds: number
   total_pnl: number
+  master_switch_active?: boolean
+}
+
+interface ReadinessSummary {
+  total_accounts: number
+  ready_count: number
+  need_login_count: number
+  low_margin_count: number
+  master_switch_active: boolean
+}
+
+interface Strategy {
+  id: number
+  strategy_tag: string
+  strategy_name: string
+  segment: string
+  timeframe: string
+  default_symbol: string
+  description?: string
+  is_active: boolean
+  subscribers_count: number
+  total_strategy_pnl?: number
+  created_at?: string
+}
+
+interface ClientStrategyMapping {
+  id: number
+  account_id: number
+  strategy_id: number
+  strategy_tag?: string
+  strategy_name?: string
+  multiplier: number
+  fixed_qty: number
+  max_daily_loss: number
+  daily_pnl: number
+  is_active: boolean
+  daily_loss_triggered: boolean
 }
 
 interface ChildAccount {
@@ -79,6 +134,7 @@ interface CopyOrderLog {
   account_id: number
   account_name?: string
   client_code?: string
+  strategy?: string
   symbol: string
   exchange: string
   action: string
@@ -90,6 +146,41 @@ interface CopyOrderLog {
   message?: string
   execution_latency_ms: number
   created_at?: string
+}
+
+interface PlainFeedCard {
+  timestamp: string
+  type: 'success' | 'error' | 'warning'
+  action: string
+  symbol: string
+  strategy: string
+  total_clients: number
+  successful: number
+  failed: number
+  latency_ms: number
+  text: string
+}
+
+interface ClientProfileDetails {
+  account: ChildAccount
+  strategies: ClientStrategyMapping[]
+  positions: Array<{
+    symbol: string
+    exchange: string
+    quantity: number
+    product: string
+    avg_price: number
+    pnl: number
+  }>
+  open_orders: Array<{
+    order_id: string
+    symbol: string
+    action: string
+    quantity: number
+    price: number
+    status: string
+  }>
+  recent_orders: CopyOrderLog[]
 }
 
 function formatCurrency(val: number): string {
@@ -106,237 +197,543 @@ export default function CopyTrading() {
     active_accounts: 0,
     total_funds: 0,
     total_pnl: 0,
+    master_switch_active: true,
+  })
+  const [readiness, setReadiness] = useState<ReadinessSummary>({
+    total_accounts: 0,
+    ready_count: 0,
+    need_login_count: 0,
+    low_margin_count: 0,
+    master_switch_active: true,
   })
   const [accounts, setAccounts] = useState<ChildAccount[]>([])
-  const [orders, setOrders] = useState<CopyOrderLog[]>([])
-  const [syncing, setSyncing] = useState<boolean>(false)
-  const [squareoffLoading, setSquareoffLoading] = useState<boolean>(false)
+  const [strategies, setStrategies] = useState<Strategy[]>([])
+  const [logs, setLogs] = useState<CopyOrderLog[]>([])
+  const [feed, setFeed] = useState<PlainFeedCard[]>([])
+  const [searchTerm, setSearchTerm] = useState<string>('')
+  const [filterIssuesOnly, setFilterIssuesOnly] = useState<boolean>(false)
 
-  // Dialog States
-  const [isAddOpen, setIsAddOpen] = useState<boolean>(false)
-  const [isSquareoffConfirmOpen, setIsSquareoffConfirmOpen] = useState<boolean>(false)
+  // Modals & Drawers
+  const [isAddAccountOpen, setIsAddAccountOpen] = useState<boolean>(false)
+  const [isAddStrategyOpen, setIsAddStrategyOpen] = useState<boolean>(false)
+  const [isFireDrillOpen, setIsFireDrillOpen] = useState<boolean>(false)
+  const [fireDrillRunning, setFireDrillRunning] = useState<boolean>(false)
+  const [fireDrillReport, setFireDrillReport] = useState<any>(null)
 
-  // Form States
+  // Client Detail Inspection Drawer
+  const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null)
+  const [clientDetails, setClientDetails] = useState<ClientProfileDetails | null>(null)
+  const [assignStrategyId, setAssignStrategyId] = useState<string>('')
+  const [assignMultiplier, setAssignMultiplier] = useState<string>('1.0')
+  const [assignMaxLoss, setAssignMaxLoss] = useState<string>('5000')
+
+  // New Account Form State
   const [formData, setFormData] = useState({
     account_name: '',
     client_code: '',
     api_key: '',
     api_secret: '',
+    api_key_market: '',
+    api_secret_market: '',
     sizing_mode: 'MULTIPLIER',
-    multiplier: '1.0',
-    fixed_qty: '0',
-    max_lot_cap: '50',
-    max_daily_loss: '5000',
+    multiplier: 1.0,
+    fixed_qty: 0,
+    max_lot_cap: 50,
+    max_daily_loss: 5000.0,
   })
-  const [formSubmitting, setFormSubmitting] = useState<boolean>(false)
-  const [formError, setFormError] = useState<string>('')
 
-  const fetchAccounts = async () => {
+  // New Strategy Form State
+  const [strategyFormData, setStrategyFormData] = useState({
+    strategy_tag: '',
+    strategy_name: '',
+    segment: 'MCXFO',
+    timeframe: '1m',
+    default_symbol: 'CRUDEOIL',
+    description: '',
+  })
+
+  const [savingAccount, setSavingAccount] = useState<boolean>(false)
+  const [savingStrategy, setSavingStrategy] = useState<boolean>(false)
+  const [syncing, setSyncing] = useState<boolean>(false)
+  const [squareoffLoading, setSquareoffLoading] = useState<boolean>(false)
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const showStatus = (type: 'success' | 'error', text: string) => {
+    setStatusMessage({ type, text })
+    setTimeout(() => setStatusMessage(null), 5000)
+  }
+
+  const fetchSummaryAndAccounts = async () => {
     try {
-      const res = await fetch('/api/copy-trading/accounts')
-      const data = await res.json()
-      if (data.status === 'success') {
-        setSummary(data.summary || {})
-        setAccounts(data.accounts || [])
+      const [accRes, stratRes, readRes, feedRes] = await Promise.all([
+        fetch('/api/copy-trading/accounts'),
+        fetch('/api/copy-trading/strategies'),
+        fetch('/api/copy-trading/readiness'),
+        fetch('/api/copy-trading/feed'),
+      ])
+
+      const accData = await accRes.json()
+      if (accData.status === 'success') {
+        setSummary(accData.summary)
+        setAccounts(accData.accounts)
       }
-    } catch (err) {
-      console.error('Failed to fetch accounts:', err)
+
+      const stratData = await stratRes.json()
+      if (stratData.status === 'success') {
+        setStrategies(stratData.strategies || [])
+      }
+
+      const readData = await readRes.json()
+      if (readData.status === 'success') {
+        setReadiness(readData.data)
+      }
+
+      const feedData = await feedRes.json()
+      if (feedData.status === 'success') {
+        setFeed(feedData.feed || [])
+      }
+    } catch (e) {
+      console.error('Error fetching copy trading telemetry:', e)
     }
   }
 
-  const fetchOrders = async () => {
+  const fetchLogs = async () => {
     try {
       const res = await fetch('/api/copy-trading/orders?limit=50')
       const data = await res.json()
       if (data.status === 'success') {
-        setOrders(data.orders || [])
+        setLogs(data.orders)
       }
-    } catch (err) {
-      console.error('Failed to fetch orders:', err)
+    } catch (e) {
+      console.error('Error fetching order logs:', e)
+    }
+  }
+
+  const fetchClientDetails = async (accountId: number) => {
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/${accountId}/details`)
+      const data = await res.json()
+      if (data.status === 'success') {
+        setClientDetails(data)
+      }
+    } catch (e) {
+      console.error('Error fetching client details:', e)
     }
   }
 
   useEffect(() => {
-    fetchAccounts()
-    fetchOrders()
+    fetchSummaryAndAccounts()
+    fetchLogs()
     const interval = setInterval(() => {
-      fetchAccounts()
-      fetchOrders()
-    }, 5000)
+      fetchSummaryAndAccounts()
+      fetchLogs()
+    }, 4000)
     return () => clearInterval(interval)
   }, [])
 
-  const handleSyncTelemetry = async () => {
-    setSyncing(true)
+  const handleMasterSwitchToggle = async (active: boolean) => {
     try {
-      await fetch('/api/copy-trading/accounts/sync', { method: 'POST' })
-      await fetchAccounts()
-    } catch (err) {
-      console.error('Failed to sync telemetry:', err)
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  const handleToggleAccount = async (id: number, currentStatus: boolean) => {
-    try {
-      await fetch(`/api/copy-trading/accounts/toggle/${id}`, {
+      const res = await fetch('/api/copy-trading/master-switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_active: !currentStatus }),
+        body: JSON.stringify({ active }),
       })
-      fetchAccounts()
-    } catch (err) {
-      console.error('Failed to toggle account:', err)
+      const data = await res.json()
+      if (data.status === 'success') {
+        setSummary((prev) => ({ ...prev, master_switch_active: active }))
+        setReadiness((prev) => ({ ...prev, master_switch_active: active }))
+        showStatus('success', data.message)
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to toggle master switch')
     }
   }
 
-  const handleDeleteAccount = async (id: number) => {
-    if (!window.confirm('Are you sure you want to remove this client account?')) return
+  const handleRunFireDrill = async () => {
+    setFireDrillRunning(true)
+    setIsFireDrillOpen(true)
     try {
-      await fetch(`/api/copy-trading/accounts/delete/${id}`, { method: 'POST' })
-      fetchAccounts()
-    } catch (err) {
-      console.error('Failed to delete account:', err)
+      const res = await fetch('/api/copy-trading/fire-drill', { method: 'POST' })
+      const data = await res.json()
+      setFireDrillReport(data)
+      fetchSummaryAndAccounts()
+    } catch (e) {
+      showStatus('error', 'Fire Drill failed to complete')
+    } finally {
+      setFireDrillRunning(false)
     }
   }
 
   const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault()
-    setFormSubmitting(true)
-    setFormError('')
-
+    setSavingAccount(true)
     try {
       const res = await fetch('/api/copy-trading/accounts/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account_name: formData.account_name,
-          client_code: formData.client_code,
-          api_key: formData.api_key,
-          api_secret: formData.api_secret,
-          sizing_mode: formData.sizing_mode,
-          multiplier: parseFloat(formData.multiplier) || 1.0,
-          fixed_qty: parseInt(formData.fixed_qty) || 0,
-          max_lot_cap: parseInt(formData.max_lot_cap) || 50,
-          max_daily_loss: parseFloat(formData.max_daily_loss) || 5000,
-        }),
+        body: JSON.stringify(formData),
       })
       const data = await res.json()
       if (data.status === 'success') {
-        setIsAddOpen(false)
+        showStatus('success', data.message)
+        setIsAddAccountOpen(false)
         setFormData({
           account_name: '',
           client_code: '',
           api_key: '',
           api_secret: '',
+          api_key_market: '',
+          api_secret_market: '',
           sizing_mode: 'MULTIPLIER',
-          multiplier: '1.0',
-          fixed_qty: '0',
-          max_lot_cap: '50',
-          max_daily_loss: '5000',
+          multiplier: 1.0,
+          fixed_qty: 0,
+          max_lot_cap: 50,
+          max_daily_loss: 5000.0,
         })
-        fetchAccounts()
+        fetchSummaryAndAccounts()
       } else {
-        setFormError(data.message || 'Failed to add account')
+        showStatus('error', data.message || 'Failed to add account')
       }
     } catch (err: any) {
-      setFormError(err.message || 'Network error')
+      showStatus('error', err.message || 'Error adding account')
     } finally {
-      setFormSubmitting(false)
+      setSavingAccount(false)
     }
   }
 
-  const handleEmergencySquareOff = async () => {
+  const handleAddStrategy = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingStrategy(true)
+    try {
+      const res = await fetch('/api/copy-trading/strategies/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(strategyFormData),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', data.message)
+        setIsAddStrategyOpen(false)
+        setStrategyFormData({
+          strategy_tag: '',
+          strategy_name: '',
+          segment: 'MCXFO',
+          timeframe: '1m',
+          default_symbol: 'CRUDEOIL',
+          description: '',
+        })
+        fetchSummaryAndAccounts()
+      } else {
+        showStatus('error', data.message || 'Failed to create strategy')
+      }
+    } catch (err: any) {
+      showStatus('error', err.message || 'Error creating strategy')
+    } finally {
+      setSavingStrategy(false)
+    }
+  }
+
+  const handleAssignStrategyToClient = async () => {
+    if (!selectedAccountId || !assignStrategyId) return
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/${selectedAccountId}/assign-strategy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          strategy_id: parseInt(assignStrategyId),
+          multiplier: parseFloat(assignMultiplier) || 1.0,
+          max_daily_loss: parseFloat(assignMaxLoss) || 5000.0,
+        }),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', 'Strategy assigned to client successfully!')
+        fetchClientDetails(selectedAccountId)
+        fetchSummaryAndAccounts()
+      } else {
+        showStatus('error', data.message || 'Failed to assign strategy')
+      }
+    } catch (e) {
+      showStatus('error', 'Error assigning strategy')
+    }
+  }
+
+  const handleToggleMapping = async (mappingId: number) => {
+    try {
+      const res = await fetch(`/api/copy-trading/mapping/toggle/${mappingId}`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        if (selectedAccountId) fetchClientDetails(selectedAccountId)
+        fetchSummaryAndAccounts()
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to toggle strategy mapping')
+    }
+  }
+
+  const handleRemoveMapping = async (mappingId: number) => {
+    if (!confirm('Remove this strategy assignment from the client?')) return
+    try {
+      const res = await fetch(`/api/copy-trading/mapping/delete/${mappingId}`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', 'Strategy removed from client')
+        if (selectedAccountId) fetchClientDetails(selectedAccountId)
+        fetchSummaryAndAccounts()
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to remove strategy')
+    }
+  }
+
+  const handleToggleAccount = async (id: number, currentActive: boolean) => {
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/toggle/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: !currentActive }),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        fetchSummaryAndAccounts()
+        if (selectedAccountId === id) fetchClientDetails(id)
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to toggle account')
+    }
+  }
+
+  const handleDeleteAccount = async (id: number, name: string) => {
+    if (!confirm(`Are you sure you want to delete trading account '${name}'?`)) return
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/delete/${id}`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', 'Account deleted successfully')
+        if (selectedAccountId === id) {
+          setSelectedAccountId(null)
+          setClientDetails(null)
+        }
+        fetchSummaryAndAccounts()
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to delete account')
+    }
+  }
+
+  const handleSquareOffSingleClient = async (accountId: number, clientName: string) => {
+    if (!confirm(`🚨 EMERGENCY: Square off all open positions and cancel orders for ${clientName}?`)) return
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/${accountId}/squareoff`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', `Square-off completed for ${clientName}!`)
+        fetchClientDetails(accountId)
+        fetchSummaryAndAccounts()
+        fetchLogs()
+      } else {
+        showStatus('error', data.message || 'Square-off failed')
+      }
+    } catch (e) {
+      showStatus('error', 'Square-off request failed')
+    }
+  }
+
+  const handleCancelClientOrders = async (accountId: number) => {
+    try {
+      const res = await fetch(`/api/copy-trading/accounts/${accountId}/cancel-orders`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', data.message)
+        fetchClientDetails(accountId)
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to cancel orders')
+    }
+  }
+
+  const handleSyncBalances = async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/copy-trading/sync', { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', 'All account balances & PnL refreshed!')
+        fetchSummaryAndAccounts()
+      }
+    } catch (e) {
+      showStatus('error', 'Failed to sync account balances')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleEmergencySquareOffAll = async () => {
+    if (!confirm('🚨 CRITICAL ACTION: Are you sure you want to SQUARE OFF ALL positions across ALL active client accounts?')) {
+      return
+    }
     setSquareoffLoading(true)
     try {
-      await fetch('/api/copy-trading/squareoff-all', { method: 'POST' })
-      setIsSquareoffConfirmOpen(false)
-      fetchAccounts()
-      fetchOrders()
-    } catch (err) {
-      console.error('Squareoff failed:', err)
+      const res = await fetch('/api/copy-trading/squareoff-all', { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', `Emergency Square-Off triggered across ${data.total_accounts} accounts!`)
+        fetchSummaryAndAccounts()
+        fetchLogs()
+      } else {
+        showStatus('error', data.message || 'Emergency square-off failed')
+      }
+    } catch (e) {
+      showStatus('error', 'Emergency square-off request failed')
     } finally {
       setSquareoffLoading(false)
     }
   }
 
+  // Filter accounts
+  const filteredAccounts = accounts.filter((acc) => {
+    const matchesSearch =
+      acc.account_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      acc.client_code.toLowerCase().includes(searchTerm.toLowerCase())
+    if (filterIssuesOnly) {
+      const hasIssue = acc.connection_status !== 'connected' || (acc.last_funds || 0) < 10000 || !acc.is_active
+      return matchesSearch && hasIssue
+    }
+    return matchesSearch
+  })
+
   return (
-    <div className="container mx-auto p-4 sm:p-6 space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div className="space-y-6 pb-12">
+      {/* Top Banner with Master Switch */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-card border rounded-xl p-5 shadow-sm">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-2">
-            <Users className="w-7 h-7 text-primary" />
-            Copy Trading Multi-Account Hub
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Zero-latency trade replication across all AC Agarwal client accounts
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight">Copy Trading & Client Hub</h1>
+            <Badge variant="secondary" className="gap-1.5 py-0.5 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              <Zap className="h-3 w-3 fill-current" />
+              Symphony XTS
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Zero-latency multi-strategy trade replication across 100+ AC Agarwal accounts (MCX & NSE)
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSyncTelemetry}
-            disabled={syncing}
-            className="flex items-center gap-1.5"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+        {/* Action Controls & Master Switch */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Master Copy-Trading Switch */}
+          <div className={`flex items-center gap-2.5 px-3.5 py-2 rounded-lg border transition-colors ${summary.master_switch_active ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/40 dark:border-emerald-800' : 'bg-rose-50 border-rose-200 dark:bg-rose-950/40 dark:border-rose-800'}`}>
+            <Power className={`h-4 w-4 ${summary.master_switch_active ? 'text-emerald-600' : 'text-rose-600'}`} />
+            <span className="text-xs font-semibold">
+              Copy Trading: {summary.master_switch_active ? 'ACTIVE' : 'PAUSED'}
+            </span>
+            <Switch
+              checked={summary.master_switch_active ?? true}
+              onCheckedChange={handleMasterSwitchToggle}
+            />
+          </div>
+
+          <Button variant="outline" size="sm" onClick={handleRunFireDrill} className="gap-1.5 border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50">
+            <Flame className="h-4 w-4" />
+            Fire Drill
+          </Button>
+
+          <Button variant="outline" size="sm" onClick={handleSyncBalances} disabled={syncing} className="gap-1.5">
+            <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
             Sync Balances
           </Button>
 
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => setIsAddOpen(true)}
-            className="flex items-center gap-1.5"
-          >
-            <Plus className="w-4 h-4" />
-            Add Client Account
+          <Button size="sm" onClick={() => setIsAddAccountOpen(true)} className="gap-1.5">
+            <UserPlus className="h-4 w-4" />
+            Add Account
           </Button>
 
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setIsSquareoffConfirmOpen(true)}
-            className="flex items-center gap-1.5 shadow-sm"
-          >
-            <AlertTriangle className="w-4 h-4" />
+          <Button variant="destructive" size="sm" onClick={handleEmergencySquareOffAll} disabled={squareoffLoading} className="gap-1.5">
+            <AlertTriangle className="h-4 w-4" />
             Square-Off All
           </Button>
         </div>
       </div>
 
-      {/* Telemetry KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-xs">Active Accounts</CardDescription>
-            <CardTitle className="text-xl sm:text-2xl font-bold">
-              {summary.active_accounts} / {summary.total_accounts}
-            </CardTitle>
-          </CardHeader>
-        </Card>
+      {/* Pre-Market Readiness Health Bar */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-xl p-4 shadow-sm border border-slate-800">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm">
+            <div className="flex items-center gap-1.5 font-semibold text-slate-300">
+              <Clock className="h-4 w-4 text-blue-400" />
+              Pre-Market Readiness:
+            </div>
+            <div className="flex items-center gap-1.5 text-emerald-400 font-medium">
+              <CheckCircle2 className="h-4 w-4" />
+              {readiness.ready_count} Accounts Ready
+            </div>
+            <div className={`flex items-center gap-1.5 font-medium ${readiness.need_login_count > 0 ? 'text-rose-400 font-bold' : 'text-slate-400'}`}>
+              <AlertCircle className="h-4 w-4" />
+              {readiness.need_login_count} Need Login
+            </div>
+            <div className={`flex items-center gap-1.5 font-medium ${readiness.low_margin_count > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+              <AlertTriangle className="h-4 w-4" />
+              {readiness.low_margin_count} Low Margin
+            </div>
+          </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-xs">Total Network Margin</CardDescription>
-            <CardTitle className="text-xl sm:text-2xl font-bold">
-              {formatCurrency(summary.total_funds)}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="text-xs">Today's Combined P&L</CardDescription>
-            <CardTitle
-              className={`text-xl sm:text-2xl font-bold ${
-                summary.total_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-              }`}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-7 text-xs bg-slate-700 hover:bg-slate-600 text-white"
+              onClick={() => setFilterIssuesOnly(!filterIssuesOnly)}
             >
+              {filterIssuesOnly ? 'Show All Accounts' : '⚡ Fix Issues Filter'}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Status Notifications */}
+      {statusMessage && (
+        <div className={`p-4 rounded-lg flex items-center justify-between border ${statusMessage.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:border-emerald-800 dark:text-emerald-200' : 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950 dark:border-rose-800 dark:text-rose-200'}`}>
+          <div className="flex items-center gap-2 text-sm font-medium">
+            {statusMessage.type === 'success' ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+            {statusMessage.text}
+          </div>
+          <button onClick={() => setStatusMessage(null)} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center justify-between">
+              <span>Active Accounts</span>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold">
+              {summary.active_accounts} <span className="text-sm font-normal text-muted-foreground">/ {summary.total_accounts}</span>
+            </CardTitle>
+          </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center justify-between">
+              <span>Total Network Margin</span>
+              <Shield className="h-4 w-4 text-muted-foreground" />
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold">{formatCurrency(summary.total_funds)}</CardTitle>
+          </CardHeader>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center justify-between">
+              <span>Today's Combined P&L</span>
+              {summary.total_pnl >= 0 ? <TrendingUp className="h-4 w-4 text-emerald-500" /> : <TrendingDown className="h-4 w-4 text-rose-500" />}
+            </CardDescription>
+            <CardTitle className={`text-2xl font-bold ${summary.total_pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
               {formatCurrency(summary.total_pnl)}
             </CardTitle>
           </CardHeader>
@@ -344,215 +741,360 @@ export default function CopyTrading() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardDescription className="text-xs">Broker Protocol</CardDescription>
-            <CardTitle className="text-xl sm:text-2xl font-bold flex items-center gap-1.5 text-blue-600 dark:text-blue-400">
-              <Zap className="w-5 h-5" />
-              Symphony XTS
+            <CardDescription className="flex items-center justify-between">
+              <span>Active Strategies</span>
+              <Layers className="h-4 w-4 text-muted-foreground" />
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold">
+              {strategies.filter((s) => s.is_active).length} <span className="text-sm font-normal text-muted-foreground">/ {strategies.length}</span>
             </CardTitle>
           </CardHeader>
         </Card>
       </div>
 
-      {/* Main Tabs */}
+      {/* Main Tabs Navigation */}
       <Tabs defaultValue="accounts" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="accounts">Client Accounts ({accounts.length})</TabsTrigger>
-          <TabsTrigger value="orders">Copy Order Logs ({orders.length})</TabsTrigger>
-          <TabsTrigger value="webhook">Webhook & Integration</TabsTrigger>
+        <TabsList className="grid grid-cols-2 md:grid-cols-5 w-full">
+          <TabsTrigger value="accounts" className="gap-2">
+            <Users className="h-4 w-4" />
+            Client Accounts ({accounts.length})
+          </TabsTrigger>
+          <TabsTrigger value="strategies" className="gap-2">
+            <Layers className="h-4 w-4" />
+            Strategies & Routing ({strategies.length})
+          </TabsTrigger>
+          <TabsTrigger value="feed" className="gap-2">
+            <Activity className="h-4 w-4" />
+            Plain-English Feed ({feed.length})
+          </TabsTrigger>
+          <TabsTrigger value="logs" className="gap-2">
+            <Clock className="h-4 w-4" />
+            Order Audit Logs
+          </TabsTrigger>
+          <TabsTrigger value="webhook" className="gap-2">
+            <Code2 className="h-4 w-4" />
+            Webhook & TV Alerts
+          </TabsTrigger>
         </TabsList>
 
         {/* Tab 1: Client Accounts Table */}
         <TabsContent value="accounts" className="space-y-4">
           <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Configured Client Accounts</CardTitle>
-              <CardDescription>
-                Manage active client accounts, customize lot multipliers, and monitor real-time P&L.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {accounts.length === 0 ? (
-                <div className="text-center py-12 space-y-3">
-                  <Users className="w-12 h-12 mx-auto text-muted-foreground opacity-50" />
-                  <h3 className="text-base font-semibold">No Client Accounts Added Yet</h3>
-                  <p className="text-sm text-muted-foreground max-w-sm mx-auto">
-                    Click "Add Client Account" above to link your first AC Agarwal trading account.
-                  </p>
-                  <Button onClick={() => setIsAddOpen(true)} size="sm">
-                    <Plus className="w-4 h-4 mr-1.5" />
-                    Add First Account
-                  </Button>
+            <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-3">
+              <div>
+                <CardTitle>Configured Client Accounts</CardTitle>
+                <CardDescription>Manage 100+ client credentials, inspect real-time positions, and assign strategies</CardDescription>
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search by code (DM933) or name..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-8 text-xs"
+                  />
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Client / Account</TableHead>
-                        <TableHead>Client Code</TableHead>
-                        <TableHead>Sizing Rule</TableHead>
-                        <TableHead>Available Margin</TableHead>
-                        <TableHead>Today's P&L</TableHead>
-                        <TableHead>Connection</TableHead>
-                        <TableHead>Active</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {accounts.map((acc) => (
-                        <TableRow key={acc.id}>
-                          <TableCell className="font-medium">
+              </div>
+            </CardHeader>
+
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Client Details</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Margin (Avail / Used)</TableHead>
+                    <TableHead>Today's P&L</TableHead>
+                    <TableHead>Trading Active</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredAccounts.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
+                        No client accounts found matching your criteria.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredAccounts.map((acc) => (
+                      <TableRow key={acc.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => { setSelectedAccountId(acc.id); fetchClientDetails(acc.id); }}>
+                        <TableCell>
+                          <div className="font-semibold text-sm flex items-center gap-2">
                             {acc.account_name}
-                            {acc.is_primary && (
-                              <Badge variant="outline" className="ml-2 text-[10px]">
-                                Master
-                              </Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="font-mono">{acc.client_code}</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className="font-normal">
-                              {acc.sizing_mode === 'MULTIPLIER' && `${acc.multiplier}x Multiplier`}
-                              {acc.sizing_mode === 'FIXED_LOTS' && `${acc.fixed_qty} Fixed Qty`}
-                              {acc.sizing_mode === 'CAPITAL_RATIO' && 'Capital Ratio'}
+                            <Badge variant="outline" className="font-mono text-[11px] uppercase">
+                              {acc.client_code}
                             </Badge>
-                          </TableCell>
-                          <TableCell>{formatCurrency(acc.last_funds)}</TableCell>
-                          <TableCell
-                            className={`font-semibold ${
-                              acc.last_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                            }`}
+                          </div>
+                          <div className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
+                            <span>Sizing: {acc.sizing_mode} ({acc.multiplier}x)</span>
+                            <span>• Max Loss: ₹{acc.max_daily_loss.toLocaleString()}</span>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge
+                            variant={acc.connection_status === 'connected' ? 'default' : 'destructive'}
+                            className={`gap-1 text-xs capitalize ${acc.connection_status === 'connected' ? 'bg-emerald-500 hover:bg-emerald-600' : ''}`}
                           >
-                            {formatCurrency(acc.last_pnl)}
-                          </TableCell>
-                          <TableCell>
-                            {acc.connection_status === 'connected' ? (
-                              <Badge variant="outline" className="text-green-600 border-green-500 bg-green-500/10 flex items-center gap-1 w-fit">
-                                <CheckCircle2 className="w-3 h-3" />
-                                Live
-                              </Badge>
+                            {acc.connection_status === 'connected' ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                            {acc.connection_status}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className="font-medium text-sm">{formatCurrency(acc.last_funds || 0)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {(acc.last_funds || 0) < 10000 ? (
+                              <span className="text-amber-600 font-semibold flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" /> Low Balance
+                              </span>
                             ) : (
-                              <Badge variant="outline" className="text-red-600 border-red-500 bg-red-500/10 flex items-center gap-1 w-fit">
-                                <XCircle className="w-3 h-3" />
-                                {acc.connection_status}
-                              </Badge>
+                              'Sufficient'
                             )}
-                          </TableCell>
-                          <TableCell>
-                            <Switch
-                              checked={acc.is_active}
-                              onCheckedChange={() => handleToggleAccount(acc.id, acc.is_active)}
-                            />
-                          </TableCell>
-                          <TableCell className="text-right">
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <div className={`font-semibold text-sm ${acc.last_pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {formatCurrency(acc.last_pnl || 0)}
+                          </div>
+                        </TableCell>
+
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Switch
+                            checked={acc.is_active}
+                            onCheckedChange={() => handleToggleAccount(acc.id, acc.is_active)}
+                          />
+                        </TableCell>
+
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs gap-1"
+                              onClick={() => { setSelectedAccountId(acc.id); fetchClientDetails(acc.id); }}
+                            >
+                              <Sliders className="h-3.5 w-3.5" />
+                              Inspect
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 text-xs text-rose-600 hover:bg-rose-50"
+                              onClick={() => handleSquareOffSingleClient(acc.id, acc.account_name)}
+                              title="Square off this client only"
+                            >
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                            </Button>
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => handleDeleteAccount(acc.id)}
-                              className="text-red-500 hover:text-red-700 hover:bg-red-500/10"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteAccount(acc.id, acc.account_name)}
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="h-4 w-4" />
                             </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Tab 2: Copy Order Logs */}
-        <TabsContent value="orders" className="space-y-4">
+        {/* Tab 2: Strategies & Routing Catalog */}
+        <TabsContent value="strategies" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Strategies & Routing Catalog</h2>
+              <p className="text-sm text-muted-foreground">Define trading strategies and generate TradingView webhook alerts</p>
+            </div>
+            <Button size="sm" onClick={() => setIsAddStrategyOpen(true)} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              Create Strategy
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {strategies.map((strat) => (
+              <Card key={strat.id} className="border shadow-sm">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <Badge variant="outline" className="font-mono text-xs uppercase bg-muted">
+                      {strat.strategy_tag}
+                    </Badge>
+                    <Badge variant={strat.is_active ? 'default' : 'secondary'} className={strat.is_active ? 'bg-emerald-500' : ''}>
+                      {strat.is_active ? 'Active' : 'Paused'}
+                    </Badge>
+                  </div>
+                  <CardTitle className="text-base font-bold mt-2">{strat.strategy_name}</CardTitle>
+                  <CardDescription className="text-xs">
+                    Segment: <span className="font-semibold text-foreground">{strat.segment}</span> • Timeframe: <span className="font-semibold text-foreground">{strat.timeframe}</span>
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pb-3 text-xs space-y-2">
+                  <div className="flex items-center justify-between text-muted-foreground">
+                    <span>Active Subscribers:</span>
+                    <span className="font-semibold text-foreground">{strat.subscribers_count} Accounts</span>
+                  </div>
+                  <div className="flex items-center justify-between text-muted-foreground">
+                    <span>Combined Strategy P&L:</span>
+                    <span className={`font-bold ${(strat.total_strategy_pnl || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {formatCurrency(strat.total_strategy_pnl || 0)}
+                    </span>
+                  </div>
+                </CardContent>
+                <CardFooter className="pt-2 border-t flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground font-mono">tag: "{strat.strategy_tag}"</span>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => alert(`TradingView Webhook Payload for ${strat.strategy_tag}:\n\n{\n  "strategy": "${strat.strategy_tag}",\n  "symbol": "${strat.default_symbol}",\n  "exchange": "${strat.segment}",\n  "action": "BUY",\n  "quantity": 100,\n  "pricetype": "MARKET",\n  "product": "MIS"\n}`)}>
+                    <Code2 className="h-3 w-3" /> View JSON
+                  </Button>
+                </CardFooter>
+              </Card>
+            ))}
+          </div>
+        </TabsContent>
+
+        {/* Tab 3: Plain-English Signal Feed */}
+        <TabsContent value="feed" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Recent Multi-Account Execution Logs</CardTitle>
-              <CardDescription>
-                Detailed audit trail of signals replicated across child accounts with individual latency.
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5 text-blue-500" />
+                Live Plain-English Execution Feed
+              </CardTitle>
+              <CardDescription>Human-readable replication logs showing strategy, accounts reached, and execution latency</CardDescription>
             </CardHeader>
-            <CardContent>
-              {orders.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  No copy trading orders recorded yet.
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Time</TableHead>
-                        <TableHead>Client Account</TableHead>
-                        <TableHead>Symbol</TableHead>
-                        <TableHead>Action</TableHead>
-                        <TableHead>Qty</TableHead>
-                        <TableHead>Type / Product</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Latency</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {orders.map((ord) => (
-                        <TableRow key={ord.id}>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {ord.created_at ? new Date(ord.created_at).toLocaleTimeString() : '-'}
-                          </TableCell>
-                          <TableCell className="font-medium">
-                            {ord.account_name} ({ord.client_code})
-                          </TableCell>
-                          <TableCell className="font-mono">{ord.symbol}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={ord.action === 'BUY' ? 'default' : 'destructive'}
-                              className="text-[10px]"
-                            >
-                              {ord.action}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>{ord.quantity}</TableCell>
-                          <TableCell className="text-xs">
-                            {ord.pricetype} / {ord.product}
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={
-                                ord.status === 'placed'
-                                  ? 'text-green-600 border-green-500 bg-green-500/10'
-                                  : 'text-red-600 border-red-500 bg-red-500/10'
-                              }
-                            >
-                              {ord.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-xs">
-                            {ord.execution_latency_ms ? `${ord.execution_latency_ms.toFixed(1)}ms` : '-'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+            <CardContent className="space-y-3">
+              {feed.length === 0 ? (
+                <div className="h-32 flex flex-col items-center justify-center text-muted-foreground text-sm">
+                  <Sparkles className="h-8 w-8 mb-2 opacity-40" />
+                  No webhook signals received yet. Waiting for incoming trades...
                 </div>
+              ) : (
+                feed.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-3.5 rounded-lg border flex items-start justify-between gap-3 ${item.type === 'success' ? 'bg-emerald-50/50 border-emerald-200 dark:bg-emerald-950/20 dark:border-emerald-800' : 'bg-rose-50/50 border-rose-200 dark:bg-rose-950/20 dark:border-rose-800'}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <Badge variant="outline" className="font-mono text-xs mt-0.5">
+                        {item.timestamp}
+                      </Badge>
+                      <div>
+                        <div className="text-sm font-semibold text-foreground">{item.text}</div>
+                        <div className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+                          <span>Strategy: <strong className="text-foreground">{item.strategy}</strong></span>
+                          <span>Clients: <strong>{item.total_clients}</strong></span>
+                          <span>Latency: <strong>{item.latency_ms}ms</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
               )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Tab 3: Webhook Integration Guide */}
+        {/* Tab 4: Audit Order Logs */}
+        <TabsContent value="logs" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div>
+                <CardTitle>Child Account Execution Logs</CardTitle>
+                <CardDescription>Real-time order statuses and execution latencies across all clients</CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={fetchLogs} className="gap-1 text-xs">
+                <RefreshCw className="h-3.5 w-3.5" /> Refresh
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Client</TableHead>
+                    <TableHead>Strategy</TableHead>
+                    <TableHead>Symbol</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Qty</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Latency</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logs.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={8} className="h-32 text-center text-muted-foreground">
+                        No copy trade execution logs found.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    logs.map((log) => (
+                      <TableRow key={log.id}>
+                        <TableCell className="text-xs font-mono text-muted-foreground">
+                          {log.created_at ? new Date(log.created_at).toLocaleTimeString() : '-'}
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-semibold text-xs">{log.account_name || 'Account'}</div>
+                          <div className="text-[11px] text-muted-foreground font-mono">{log.client_code}</div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            {log.strategy || 'GLOBAL'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-medium text-xs">{log.symbol}</TableCell>
+                        <TableCell>
+                          <Badge variant={log.action === 'BUY' ? 'default' : 'destructive'} className="text-[10px]">
+                            {log.action}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs font-semibold">{log.quantity}</TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={log.status === 'placed' ? 'default' : 'destructive'}
+                            className={`text-[10px] capitalize ${log.status === 'placed' ? 'bg-emerald-500' : ''}`}
+                          >
+                            {log.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs font-mono text-muted-foreground">
+                          {log.execution_latency_ms ? `${log.execution_latency_ms.toFixed(1)}ms` : '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 5: Webhook & TV Integration */}
         <TabsContent value="webhook" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">TradingView & Strategy Webhook Ingestion</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <Code2 className="h-5 w-5 text-blue-500" />
+                TradingView & Python Signal Webhook Endpoint
+              </CardTitle>
               <CardDescription>
-                Point your TradingView alerts or Python algorithms to this single endpoint to replicate trades across all active accounts.
+                Send signals to this URL to replicate trades dynamically to all subscribed clients in 15-30ms
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <Label className="text-xs font-semibold">Copy Trading Webhook URL</Label>
-                <div className="flex items-center gap-2 mt-1.5">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Webhook Destination URL</Label>
+                <div className="flex gap-2">
                   <Input
                     readOnly
                     value={`${window.location.origin}/api/copy-trading/webhook`}
@@ -561,25 +1103,26 @@ export default function CopyTrading() {
                   <Button
                     variant="outline"
                     size="sm"
+                    className="gap-1.5"
                     onClick={() => {
                       navigator.clipboard.writeText(`${window.location.origin}/api/copy-trading/webhook`)
-                      alert('Webhook URL copied to clipboard!')
+                      showStatus('success', 'Webhook URL copied to clipboard!')
                     }}
                   >
-                    <Copy className="w-4 h-4" />
+                    <Copy className="h-4 w-4" /> Copy
                   </Button>
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs font-semibold">Example JSON Webhook Payload</Label>
-                <pre className="mt-1.5 p-4 rounded-lg bg-muted font-mono text-xs overflow-x-auto">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold">Sample TradingView Alert JSON Payload (MCX Crude Oil Strategy)</Label>
+                <pre className="bg-slate-950 text-slate-100 p-4 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed">
 {`{
-  "strategy": "NIFTY_MOMENTUM",
-  "symbol": "NIFTY28AUG2424500CE",
-  "exchange": "NFO",
+  "strategy": "CRUDE_1M_SCALP",
+  "symbol": "CRUDEOIL24AUGFUT",
+  "exchange": "MCXFO",
   "action": "BUY",
-  "quantity": 25,
+  "quantity": 100,
   "pricetype": "MARKET",
   "product": "MIS"
 }`}
@@ -590,164 +1133,480 @@ export default function CopyTrading() {
         </TabsContent>
       </Tabs>
 
-      {/* Add Client Account Dialog */}
-      <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+      {/* Client Inspection Drawer / Modal */}
+      {selectedAccountId && clientDetails && (
+        <Dialog open={Boolean(selectedAccountId)} onOpenChange={(open) => { if (!open) setSelectedAccountId(null); }}>
+          <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader className="border-b pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <DialogTitle className="text-xl font-bold flex items-center gap-2">
+                    {clientDetails.account.account_name}
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {clientDetails.account.client_code}
+                    </Badge>
+                  </DialogTitle>
+                  <DialogDescription className="text-xs mt-1">
+                    Available Cash: <strong>{formatCurrency(clientDetails.account.last_funds || 0)}</strong> • Today's PnL:{' '}
+                    <strong className={(clientDetails.account.last_pnl || 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                      {formatCurrency(clientDetails.account.last_pnl || 0)}
+                    </strong>
+                  </DialogDescription>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() => window.open(`/api/copy-trading/export/client/${selectedAccountId}`, '_blank')}
+                  >
+                    <Download className="h-3.5 w-3.5" /> CSV Report
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="text-xs gap-1"
+                    onClick={() => handleSquareOffSingleClient(clientDetails.account.id, clientDetails.account.account_name)}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" /> Square-Off
+                  </Button>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <Tabs defaultValue="strategies" className="mt-3">
+              <TabsList className="grid grid-cols-3 w-full">
+                <TabsTrigger value="strategies" className="text-xs">
+                  Assigned Strategies ({clientDetails.strategies.length})
+                </TabsTrigger>
+                <TabsTrigger value="positions" className="text-xs">
+                  Live Positions ({clientDetails.positions.length})
+                </TabsTrigger>
+                <TabsTrigger value="orders" className="text-xs">
+                  Open Orders ({clientDetails.open_orders.length})
+                </TabsTrigger>
+              </TabsList>
+
+              {/* Subscribed Strategies */}
+              <TabsContent value="strategies" className="space-y-4 pt-2">
+                <div className="flex items-center gap-2 bg-muted/40 p-3 rounded-lg border">
+                  <Select value={assignStrategyId} onValueChange={setAssignStrategyId}>
+                    <SelectTrigger className="text-xs w-56">
+                      <SelectValue placeholder="Select Strategy to Assign" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {strategies.map((s) => (
+                        <SelectItem key={s.id} value={s.id.toString()}>
+                          {s.strategy_name} ({s.strategy_tag})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
+                  <Input
+                    placeholder="Multiplier (e.g. 2.0x)"
+                    value={assignMultiplier}
+                    onChange={(e) => setAssignMultiplier(e.target.value)}
+                    className="text-xs w-36"
+                  />
+
+                  <Input
+                    placeholder="Max Loss (Rs)"
+                    value={assignMaxLoss}
+                    onChange={(e) => setAssignMaxLoss(e.target.value)}
+                    className="text-xs w-32"
+                  />
+
+                  <Button size="sm" onClick={handleAssignStrategyToClient} className="text-xs gap-1">
+                    <Plus className="h-3.5 w-3.5" /> Assign
+                  </Button>
+                </div>
+
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Strategy</TableHead>
+                      <TableHead>Multiplier</TableHead>
+                      <TableHead>Max Daily Loss</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {clientDetails.strategies.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="h-20 text-center text-muted-foreground text-xs">
+                          No strategies assigned yet. Select a strategy above to enroll this client.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      clientDetails.strategies.map((m) => (
+                        <TableRow key={m.id}>
+                          <TableCell className="font-semibold text-xs">
+                            {m.strategy_name || m.strategy_tag}
+                            <div className="text-[10px] text-muted-foreground font-mono">{m.strategy_tag}</div>
+                          </TableCell>
+                          <TableCell className="text-xs font-semibold">{m.multiplier}x</TableCell>
+                          <TableCell className="text-xs">₹{m.max_daily_loss.toLocaleString()}</TableCell>
+                          <TableCell>
+                            <Switch checked={m.is_active} onCheckedChange={() => handleToggleMapping(m.id)} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-rose-500"
+                              onClick={() => handleRemoveMapping(m.id)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+
+              {/* Live Positions */}
+              <TabsContent value="positions" className="pt-2">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Symbol</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Avg Price</TableHead>
+                      <TableHead>PnL</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {clientDetails.positions.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="h-20 text-center text-muted-foreground text-xs">
+                          No open positions for this client.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      clientDetails.positions.map((pos, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell className="font-semibold text-xs">{pos.symbol}</TableCell>
+                          <TableCell className="text-xs font-bold">{pos.quantity}</TableCell>
+                          <TableCell className="text-xs font-mono">₹{pos.avg_price.toFixed(2)}</TableCell>
+                          <TableCell className={`text-xs font-bold ${pos.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {formatCurrency(pos.pnl)}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+
+              {/* Open Orders */}
+              <TabsContent value="orders" className="pt-2 space-y-3">
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs text-rose-600 gap-1"
+                    onClick={() => handleCancelClientOrders(clientDetails.account.id)}
+                  >
+                    <StopCircle className="h-3.5 w-3.5" /> Cancel All Orders
+                  </Button>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Order ID</TableHead>
+                      <TableHead>Symbol</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Price</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {clientDetails.open_orders.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="h-20 text-center text-muted-foreground text-xs">
+                          No pending orders for this client.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      clientDetails.open_orders.map((ord) => (
+                        <TableRow key={ord.order_id}>
+                          <TableCell className="font-mono text-[11px]">{ord.order_id}</TableCell>
+                          <TableCell className="font-semibold text-xs">{ord.symbol}</TableCell>
+                          <TableCell>
+                            <Badge variant={ord.action === 'BUY' ? 'default' : 'destructive'} className="text-[10px]">
+                              {ord.action}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs font-bold">{ord.quantity}</TableCell>
+                          <TableCell className="text-xs font-mono">₹{ord.price}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-[10px]">
+                              {ord.status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+            </Tabs>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Pre-Market Fire Drill Modal */}
+      <Dialog open={isFireDrillOpen} onOpenChange={setIsFireDrillOpen}>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Add AC Agarwal Client Account</DialogTitle>
-            <DialogDescription>
-              Link a new child trading account. Credentials will be securely encrypted with Fernet 256-bit encryption.
+            <DialogTitle className="flex items-center gap-2">
+              <Flame className="h-5 w-5 text-amber-500" />
+              Pre-Market Fire Drill Pre-Flight Report
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Zero-risk pre-market diagnostic verifying tokens, API latency, and margins across all 100+ accounts
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleAddAccount} className="space-y-4 py-2">
-            {formError && (
-              <div className="p-3 text-xs rounded-md bg-destructive/15 text-destructive border border-destructive/20">
-                {formError}
+          {fireDrillRunning ? (
+            <div className="h-40 flex flex-col items-center justify-center gap-3">
+              <RefreshCw className="h-8 w-8 animate-spin text-amber-500" />
+              <p className="text-xs text-muted-foreground">Pinging and validating all client sessions...</p>
+            </div>
+          ) : fireDrillReport ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="p-3 bg-muted rounded-lg">
+                  <div className="text-xs text-muted-foreground">Tested Accounts</div>
+                  <div className="text-xl font-bold">{fireDrillReport.total_tested}</div>
+                </div>
+                <div className="p-3 bg-emerald-50 text-emerald-800 rounded-lg">
+                  <div className="text-xs">100% Ready</div>
+                  <div className="text-xl font-bold">{fireDrillReport.ready_count}</div>
+                </div>
+                <div className="p-3 bg-rose-50 text-rose-800 rounded-lg">
+                  <div className="text-xs">Issues Found</div>
+                  <div className="text-xl font-bold">{fireDrillReport.issue_count}</div>
+                </div>
               </div>
-            )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="account_name">Client Name</Label>
+              <div className="max-h-60 overflow-y-auto border rounded-lg p-2 space-y-1">
+                {fireDrillReport.results.map((r: any) => (
+                  <div key={r.account_id} className="flex items-center justify-between text-xs p-1.5 hover:bg-muted rounded">
+                    <div className="flex items-center gap-2">
+                      {r.ready ? <CheckCircle2 className="h-4 w-4 text-emerald-500" /> : <XCircle className="h-4 w-4 text-rose-500" />}
+                      <span className="font-semibold">{r.account_name}</span>
+                      <span className="font-mono text-muted-foreground">({r.client_code})</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span>{formatCurrency(r.funds)}</span>
+                      <span className="text-muted-foreground font-mono">{r.latency_ms}ms</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button size="sm" onClick={() => setIsFireDrillOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Client Account Modal */}
+      <Dialog open={isAddAccountOpen} onOpenChange={setIsAddAccountOpen}>
+        <DialogContent className="max-w-lg">
+          <form onSubmit={handleAddAccount}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <UserPlus className="h-5 w-5 text-blue-500" />
+                Add AC Agarwal Client Account
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Credentials are encrypted with 256-bit AES Fernet storage in SQLite.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-3 py-3 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Client Name</Label>
+                  <Input
+                    required
+                    placeholder="e.g. Rahul Sharma"
+                    value={formData.account_name}
+                    onChange={(e) => setFormData({ ...formData, account_name: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Client Code / User ID</Label>
+                  <Input
+                    required
+                    placeholder="e.g. DM933"
+                    value={formData.client_code}
+                    onChange={(e) => setFormData({ ...formData, client_code: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Interactive API Key</Label>
                 <Input
-                  id="account_name"
                   required
-                  placeholder="e.g. Rahul Sharma"
-                  value={formData.account_name}
-                  onChange={(e) => setFormData({ ...formData, account_name: e.target.value })}
+                  placeholder="Interactive API Key"
+                  value={formData.api_key}
+                  onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="client_code">Client Code / User ID</Label>
+              <div className="space-y-1">
+                <Label>Interactive API Secret</Label>
                 <Input
-                  id="client_code"
                   required
-                  placeholder="e.g. DM933"
-                  value={formData.client_code}
-                  onChange={(e) => setFormData({ ...formData, client_code: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="api_key">Interactive API Key (BROKER_API_KEY)</Label>
-              <Input
-                id="api_key"
-                required
-                placeholder="Enter Interactive API Key"
-                value={formData.api_key}
-                onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="api_secret">Interactive API Secret (BROKER_API_SECRET)</Label>
-              <Input
-                id="api_secret"
-                type="password"
-                required
-                placeholder="Enter Interactive API Secret"
-                value={formData.api_secret}
-                onChange={(e) => setFormData({ ...formData, api_secret: e.target.value })}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label>Sizing Mode</Label>
-                <Select
-                  value={formData.sizing_mode}
-                  onValueChange={(val) => setFormData({ ...formData, sizing_mode: val })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="MULTIPLIER">Multiplier (Proportional)</SelectItem>
-                    <SelectItem value="FIXED_LOTS">Fixed Quantity</SelectItem>
-                    <SelectItem value="CAPITAL_RATIO">Capital Ratio</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="multiplier">Multiplier</Label>
-                <Input
-                  id="multiplier"
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  value={formData.multiplier}
-                  onChange={(e) => setFormData({ ...formData, multiplier: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="max_lot_cap">Max Lot Cap</Label>
-                <Input
-                  id="max_lot_cap"
-                  type="number"
-                  value={formData.max_lot_cap}
-                  onChange={(e) => setFormData({ ...formData, max_lot_cap: e.target.value })}
+                  type="password"
+                  placeholder="Interactive API Secret"
+                  value={formData.api_secret}
+                  onChange={(e) => setFormData({ ...formData, api_secret: e.target.value })}
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="max_daily_loss">Max Daily Loss (₹)</Label>
-                <Input
-                  id="max_daily_loss"
-                  type="number"
-                  value={formData.max_daily_loss}
-                  onChange={(e) => setFormData({ ...formData, max_daily_loss: e.target.value })}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Default Multiplier</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="10.0"
+                    value={formData.multiplier}
+                    onChange={(e) => setFormData({ ...formData, multiplier: parseFloat(e.target.value) || 1.0 })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>Max Daily Loss (₹)</Label>
+                  <Input
+                    type="number"
+                    value={formData.max_daily_loss}
+                    onChange={(e) => setFormData({ ...formData, max_daily_loss: parseFloat(e.target.value) || 5000.0 })}
+                  />
+                </div>
               </div>
             </div>
 
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setIsAddOpen(false)}>
+            <DialogFooter>
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsAddAccountOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={formSubmitting}>
-                {formSubmitting ? 'Verifying & Saving...' : 'Save & Connect'}
+              <Button type="submit" size="sm" disabled={savingAccount}>
+                {savingAccount ? 'Connecting...' : 'Save & Connect'}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* Emergency Square-Off Confirmation Dialog */}
-      <Dialog open={isSquareoffConfirmOpen} onOpenChange={setIsSquareoffConfirmOpen}>
-        <DialogContent className="sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="w-5 h-5" />
-              Emergency Square-Off All Accounts?
-            </DialogTitle>
-            <DialogDescription>
-              This will immediately cancel all open pending orders and place MARKET exit orders for all open positions across all active child accounts. This action is irreversible.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Add Strategy Modal */}
+      <Dialog open={isAddStrategyOpen} onOpenChange={setIsAddStrategyOpen}>
+        <DialogContent className="max-w-md">
+          <form onSubmit={handleAddStrategy}>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Layers className="h-5 w-5 text-blue-500" />
+                Create Copy Strategy
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Define a strategy tag for routing TradingView webhooks to subscribed clients.
+              </DialogDescription>
+            </DialogHeader>
 
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              variant="outline"
-              onClick={() => setIsSquareoffConfirmOpen(false)}
-              disabled={squareoffLoading}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleEmergencySquareOff}
-              disabled={squareoffLoading}
-            >
-              {squareoffLoading ? 'Closing All Positions...' : 'Yes, Square-Off All'}
-            </Button>
-          </DialogFooter>
+            <div className="grid gap-3 py-3 text-xs">
+              <div className="space-y-1">
+                <Label>Strategy Tag (Unique Key)</Label>
+                <Input
+                  required
+                  placeholder="e.g. CRUDE_1M_SCALP"
+                  value={strategyFormData.strategy_tag}
+                  onChange={(e) => setStrategyFormData({ ...strategyFormData, strategy_tag: e.target.value.toUpperCase() })}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label>Strategy Name</Label>
+                <Input
+                  required
+                  placeholder="e.g. Crude Oil 1-Minute Momentum"
+                  value={strategyFormData.strategy_name}
+                  onChange={(e) => setStrategyFormData({ ...strategyFormData, strategy_name: e.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Exchange Segment</Label>
+                  <Select
+                    value={strategyFormData.segment}
+                    onValueChange={(val) => setStrategyFormData({ ...strategyFormData, segment: val })}
+                  >
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Segment" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="MCXFO">MCXFO (Commodities)</SelectItem>
+                      <SelectItem value="NSEFO">NSEFO (Index & Stock Options)</SelectItem>
+                      <SelectItem value="NSECM">NSECM (Equities Cash)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label>Timeframe</Label>
+                  <Select
+                    value={strategyFormData.timeframe}
+                    onValueChange={(val) => setStrategyFormData({ ...strategyFormData, timeframe: val })}
+                  >
+                    <SelectTrigger className="text-xs">
+                      <SelectValue placeholder="Timeframe" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1m">1 Minute</SelectItem>
+                      <SelectItem value="5m">5 Minutes</SelectItem>
+                      <SelectItem value="15m">15 Minutes</SelectItem>
+                      <SelectItem value="1h">1 Hour</SelectItem>
+                      <SelectItem value="Daily">Daily</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Default Symbol</Label>
+                <Input
+                  required
+                  placeholder="e.g. CRUDEOIL, NIFTY, GOLD"
+                  value={strategyFormData.default_symbol}
+                  onChange={(e) => setStrategyFormData({ ...strategyFormData, default_symbol: e.target.value.toUpperCase() })}
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" size="sm" onClick={() => setIsAddStrategyOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={savingStrategy}>
+                {savingStrategy ? 'Creating...' : 'Create Strategy'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

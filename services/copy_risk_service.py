@@ -245,3 +245,221 @@ def emergency_squareoff_all_accounts() -> Dict[str, Any]:
         "total_latency_ms": round(total_latency_ms, 2),
         "results": results,
     }
+
+
+def squareoff_by_account_id(account_id: int) -> Dict[str, Any]:
+    """Emergency square-off for a specific single client account."""
+    from database.copy_trading_db import get_child_account
+    account = get_child_account(account_id, include_secrets=True)
+    if not account:
+        return {"status": "error", "message": "Account not found"}
+    return squareoff_single_account(account)
+
+
+def cancel_orders_by_account_id(account_id: int) -> Dict[str, Any]:
+    """Cancel all open pending orders for a specific client account."""
+    from database.copy_trading_db import get_child_account
+    account = get_child_account(account_id, include_secrets=True)
+    if not account:
+        return {"status": "error", "message": "Account not found"}
+
+    success, token, err = get_or_refresh_child_token(account)
+    if not success or not token:
+        return {"status": "error", "message": f"Auth failed: {err}"}
+
+    headers = {"Content-Type": "application/json", "Authorization": token}
+    cancelled_orders = []
+
+    try:
+        orders_url = f"{INTERACTIVE_URL}/orders"
+        ord_resp = requests.get(orders_url, headers=headers, timeout=4)
+        if ord_resp.status_code == 200:
+            ord_data = ord_resp.json()
+            if ord_data.get("type") == "success":
+                order_list = ord_data.get("result", []) or []
+                for o in order_list:
+                    status = str(o.get("OrderStatus", "")).upper()
+                    if status in ["OPEN", "PENDING", "NEW", "TRIGGER PENDING"]:
+                        app_order_id = str(o.get("AppOrderID", ""))
+                        if app_order_id:
+                            del_resp = requests.delete(f"{orders_url}?appOrderID={app_order_id}", headers=headers, timeout=4)
+                            if del_resp.status_code == 200:
+                                cancelled_orders.append(app_order_id)
+        return {"status": "success", "cancelled_orders": cancelled_orders, "message": f"Cancelled {len(cancelled_orders)} pending orders"}
+    except Exception as e:
+        logger.error(f"[Cancel Orders] Exception for {account.get('account_name')}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def fetch_client_profile_details(account_id: int) -> Dict[str, Any]:
+    """
+    Fetch comprehensive live details for a single client to populate the Client Inspection Drawer:
+    - Subscribed strategies with multipliers
+    - Live net positions with LTP and PnL
+    - Open pending orders
+    - Recent executions
+    """
+    from database.copy_trading_db import (
+        get_account_strategies,
+        get_child_account,
+        get_copy_orders,
+    )
+    account = get_child_account(account_id, include_secrets=True)
+    if not account:
+        return {"status": "error", "message": "Account not found"}
+
+    strategies = get_account_strategies(account_id)
+    recent_orders = get_copy_orders(limit=20, account_id=account_id)
+
+    # Fetch live positions and orders from broker
+    positions = []
+    open_orders = []
+
+    success, token, err = get_or_refresh_child_token(account)
+    if success and token:
+        headers = {"Authorization": token}
+        try:
+            p_resp = requests.get(f"{INTERACTIVE_URL}/portfolio/positions?dayOrNet=NetWise", headers=headers, timeout=4)
+            if p_resp.status_code == 200:
+                p_data = p_resp.json()
+                if p_data.get("type") == "success":
+                    raw_positions = p_data.get("result", {}).get("positionList", []) or []
+                    for p in raw_positions:
+                        qty = int(p.get("netQuantity", 0) or 0)
+                        if qty != 0:
+                            positions.append({
+                                "symbol": p.get("TradingSymbol", ""),
+                                "exchange": p.get("ExchangeSegment", "NSEFO"),
+                                "quantity": qty,
+                                "product": p.get("ProductType", "MIS"),
+                                "avg_price": float(p.get("buyAveragePrice" if qty > 0 else "sellAveragePrice", 0.0) or 0.0),
+                                "pnl": float(p.get("unrealizedMTM", 0.0) or 0.0) + float(p.get("realizedMTM", 0.0) or 0.0),
+                            })
+        except Exception as e:
+            logger.debug(f"[Profile] Position fetch error for {account_id}: {e}")
+
+        try:
+            o_resp = requests.get(f"{INTERACTIVE_URL}/orders", headers=headers, timeout=4)
+            if o_resp.status_code == 200:
+                o_data = o_resp.json()
+                if o_data.get("type") == "success":
+                    raw_orders = o_data.get("result", []) or []
+                    for o in raw_orders:
+                        st = str(o.get("OrderStatus", "")).upper()
+                        if st in ["OPEN", "PENDING", "NEW", "TRIGGER PENDING"]:
+                            open_orders.append({
+                                "order_id": str(o.get("AppOrderID", "")),
+                                "symbol": o.get("TradingSymbol", ""),
+                                "action": o.get("OrderSide", "BUY"),
+                                "quantity": int(o.get("OrderQuantity", 0) or 0),
+                                "price": float(o.get("OrderPrice", 0.0) or 0.0),
+                                "status": st,
+                            })
+        except Exception as e:
+            logger.debug(f"[Profile] Open orders fetch error for {account_id}: {e}")
+
+    # Remove secret tokens before returning to UI
+    account_safe = get_child_account(account_id, include_secrets=False)
+
+    return {
+        "status": "success",
+        "account": account_safe,
+        "strategies": strategies,
+        "positions": positions,
+        "open_orders": open_orders,
+        "recent_orders": recent_orders,
+    }
+
+
+def run_premarket_fire_drill() -> Dict[str, Any]:
+    """
+    🎯 1-Click Pre-Market Fire Drill:
+    Runs a zero-trade dry run across all 100+ child accounts at 9:00 AM, testing:
+    - Session authentication & token freshness
+    - Available cash margin vs minimum buffer (Rs 10,000)
+    - Connection latency in milliseconds
+    Returns a comprehensive pre-flight health report.
+    """
+    t0 = time.time()
+    accounts = get_all_child_accounts(active_only=False, include_secrets=True)
+    if not accounts:
+        return {
+            "status": "success",
+            "message": "No child accounts configured",
+            "total_tested": 0,
+            "ready_count": 0,
+            "issue_count": 0,
+            "results": [],
+        }
+
+    logger.info(f"[Fire Drill] Starting pre-market dry run across {len(accounts)} accounts...")
+
+    def _test_single(acc: Dict[str, Any]) -> Dict[str, Any]:
+        acc_start = time.time()
+        acc_id = acc["id"]
+        success, token, err = get_or_refresh_child_token(acc)
+        acc_latency = (time.time() - acc_start) * 1000
+
+        if not success or not token:
+            return {
+                "account_id": acc_id,
+                "account_name": acc["account_name"],
+                "client_code": acc["client_code"],
+                "status": "error",
+                "ready": False,
+                "issue": f"Login failed: {err}",
+                "funds": 0.0,
+                "latency_ms": round(acc_latency, 1),
+            }
+
+        # Check balance
+        funds = 0.0
+        try:
+            b_resp = requests.get(f"{INTERACTIVE_URL}/user/balance", headers={"Authorization": token}, timeout=3)
+            if b_resp.status_code == 200:
+                b_data = b_resp.json()
+                res = b_data.get("result", {})
+                funds = float(res.get("availableBalance", res.get("cash", 0.0)))
+                update_account_status(acc_id, "connected", funds=funds)
+        except Exception:
+            pass
+
+        is_low_margin = funds < 10000.0
+        issue = "Low Margin (< Rs 10,000)" if is_low_margin else None
+
+        return {
+            "account_id": acc_id,
+            "account_name": acc["account_name"],
+            "client_code": acc["client_code"],
+            "status": "warning" if is_low_margin else "success",
+            "ready": not is_low_margin,
+            "issue": issue,
+            "funds": funds,
+            "latency_ms": round(acc_latency, 1),
+        }
+
+    results = []
+    ready_count = 0
+    issue_count = 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(30, len(accounts))) as executor:
+        futures = {executor.submit(_test_single, acc): acc for acc in accounts}
+        for fut in concurrent.futures.as_completed(futures):
+            res = fut.result()
+            results.append(res)
+            if res.get("ready"):
+                ready_count += 1
+            else:
+                issue_count += 1
+
+    total_time_ms = (time.time() - t0) * 1000
+    logger.info(f"[Fire Drill] Completed in {total_time_ms:.1f}ms: {ready_count} Ready, {issue_count} Issues.")
+
+    return {
+        "status": "success",
+        "total_tested": len(accounts),
+        "ready_count": ready_count,
+        "issue_count": issue_count,
+        "total_time_ms": round(total_time_ms, 1),
+        "results": results,
+    }
