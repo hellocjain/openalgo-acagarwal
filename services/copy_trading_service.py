@@ -32,19 +32,23 @@ logger = get_logger(__name__)
 
 # Active in-memory session token cache: {account_id: {"token": str, "timestamp": float}}
 _TOKEN_CACHE: Dict[int, Dict[str, Any]] = {}
+_TOKEN_LOCK = threading.Lock()
 TOKEN_CACHE_TTL = 14400  # 4 hours
 
 # 3-Second SHA-256 Idempotency Cache: {hash: timestamp}
 _DEDUPE_CACHE: Dict[str, float] = {}
+_DEDUPE_LOCK = threading.Lock()
 DEDUPE_WINDOW_SEC = 3.0
 
 # Plain-English Signal Feed circular buffer (stores latest 50 formatted execution summaries)
 _PLAIN_ENGLISH_FEED = deque(maxlen=50)
+_FEED_LOCK = threading.Lock()
 
 
 def get_plain_english_feed() -> List[Dict[str, Any]]:
     """Retrieve the latest plain-English signal execution cards."""
-    return list(_PLAIN_ENGLISH_FEED)
+    with _FEED_LOCK:
+        return list(_PLAIN_ENGLISH_FEED)
 
 
 def _compute_signal_hash(order_data: Dict[str, Any]) -> str:
@@ -63,16 +67,17 @@ def _compute_signal_hash(order_data: Dict[str, Any]) -> str:
 def is_duplicate_signal(order_data: Dict[str, Any]) -> bool:
     """Check if signal is a duplicate within the 3-second idempotency window."""
     now = time.time()
-    # Clean expired hashes
-    expired = [h for h, t in _DEDUPE_CACHE.items() if now - t > DEDUPE_WINDOW_SEC]
-    for h in expired:
-        _DEDUPE_CACHE.pop(h, None)
+    with _DEDUPE_LOCK:
+        # Clean expired hashes
+        expired = [h for h, t in _DEDUPE_CACHE.items() if now - t > DEDUPE_WINDOW_SEC]
+        for h in expired:
+            _DEDUPE_CACHE.pop(h, None)
 
-    sig_hash = _compute_signal_hash(order_data)
-    if sig_hash in _DEDUPE_CACHE:
-        return True
-    _DEDUPE_CACHE[sig_hash] = now
-    return False
+        sig_hash = _compute_signal_hash(order_data)
+        if sig_hash in _DEDUPE_CACHE:
+            return True
+        _DEDUPE_CACHE[sig_hash] = now
+        return False
 
 
 def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
@@ -89,15 +94,17 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
         return False, None, "Missing API Key or Secret"
 
     now = time.time()
-    if account_id in _TOKEN_CACHE:
-        cached = _TOKEN_CACHE[account_id]
-        if now - cached.get("timestamp", 0) < TOKEN_CACHE_TTL and cached.get("token"):
-            return True, cached["token"], None
+    with _TOKEN_LOCK:
+        if account_id in _TOKEN_CACHE:
+            cached = _TOKEN_CACHE[account_id]
+            if now - cached.get("timestamp", 0) < TOKEN_CACHE_TTL and cached.get("token"):
+                return True, cached["token"], None
 
     # DB stored token
     db_token = account.get("auth_token")
     if db_token:
-        _TOKEN_CACHE[account_id] = {"token": db_token, "timestamp": now}
+        with _TOKEN_LOCK:
+            _TOKEN_CACHE[account_id] = {"token": db_token, "timestamp": now}
         return True, db_token, None
 
     # Login to AC Agarwal Symphony XTS Interactive API
@@ -115,7 +122,8 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
         if resp.status_code == 200 and data.get("type") == "success":
             token = data.get("result", {}).get("token")
             if token:
-                _TOKEN_CACHE[account_id] = {"token": token, "timestamp": now}
+                with _TOKEN_LOCK:
+                    _TOKEN_CACHE[account_id] = {"token": token, "timestamp": now}
                 update_account_status(account_id, "connected", auth_token=token)
                 logger.info(f"[Copy Trading] Authenticated child account {account['account_name']} ({client_code})")
                 return True, token, None
@@ -160,6 +168,51 @@ def get_commodity_freeze_qty(symbol: str) -> Optional[int]:
     return None
 
 
+def get_inferred_lot_size(symbol: str, exchange: str) -> int:
+    """Infer standard exchange lot sizes for MCX and NSE/BSE derivative contracts."""
+    sym = (symbol or "").upper().strip()
+    ex = (exchange or "").upper().strip()
+
+    if "MCX" in ex or sym.startswith("CRUDE") or sym.startswith("GOLD") or sym.startswith("SILVER") or sym.startswith("NATURAL"):
+        if sym.startswith("CRUDEOILM"):
+            return 10
+        if sym.startswith("CRUDEOIL"):
+            return 100
+        if sym.startswith("NATGASMINI"):
+            return 250
+        if sym.startswith("NATURALGAS"):
+            return 1250
+        if sym.startswith("GOLDGUINEA"):
+            return 1
+        if sym.startswith("GOLDM"):
+            return 10
+        if sym.startswith("GOLD"):
+            return 100
+        if sym.startswith("SILVERMIC"):
+            return 1
+        if sym.startswith("SILVERM"):
+            return 5
+        if sym.startswith("SILVER"):
+            return 30
+        if sym.startswith("COPPER"):
+            return 2500
+        if sym.startswith("ZINC"):
+            return 5000
+    if sym.startswith("NIFTY"):
+        return 25
+    if sym.startswith("BANKNIFTY"):
+        return 15
+    if sym.startswith("FINNIFTY"):
+        return 25
+    if sym.startswith("MIDCPNIFTY"):
+        return 50
+    if sym.startswith("SENSEX"):
+        return 10
+    if sym.startswith("BANKEX"):
+        return 15
+    return 1
+
+
 def slice_order_quantities(quantity: int, symbol: str, exchange: str) -> List[int]:
     """
     Slice quantity into multiple sub-orders if it exceeds the exchange freeze quantity limit.
@@ -185,16 +238,22 @@ def calculate_child_quantity(
     master_qty: int,
     lot_size: int = 1,
     master_funds: float = 0.0,
+    symbol: str = "",
+    exchange: str = "",
 ) -> int:
     """
     Calculate target quantity for a child account based on per-strategy multiplier or account default.
     """
     lot_size = max(1, lot_size)
+    if lot_size <= 1:
+        inferred = get_inferred_lot_size(symbol, exchange)
+        if inferred > 1:
+            lot_size = inferred
 
     # Check if a strategy-specific multiplier or fixed qty was attached
     if "strategy_multiplier" in account:
-        multiplier = float(account["strategy_multiplier"])
-        fixed_qty = int(account.get("strategy_fixed_qty", 0))
+        multiplier = max(0.01, float(account["strategy_multiplier"]))
+        fixed_qty = max(0, int(account.get("strategy_fixed_qty", 0)))
         if fixed_qty > 0:
             return fixed_qty
         raw_qty = master_qty * multiplier
@@ -203,9 +262,9 @@ def calculate_child_quantity(
 
     # Fallback to account-level sizing mode
     mode = account.get("sizing_mode", "MULTIPLIER")
-    multiplier = float(account.get("multiplier", 1.0))
-    fixed_qty = int(account.get("fixed_qty", 0))
-    max_lot_cap = int(account.get("max_lot_cap", 50))
+    multiplier = max(0.01, float(account.get("multiplier", 1.0)))
+    fixed_qty = max(0, int(account.get("fixed_qty", 0)))
+    max_lot_cap = max(1, int(account.get("max_lot_cap", 50)))
     max_qty_cap = max_lot_cap * lot_size
 
     if mode == "FIXED_LOTS" and fixed_qty > 0:
@@ -267,13 +326,12 @@ def execute_order_for_single_account(
         }
 
     # 2. Calculate child-specific quantity
-    base_qty = int(order_data.get("quantity", 1))
-    lot_size = int(order_data.get("lot_size", 1))
-    child_qty = calculate_child_quantity(account, base_qty, lot_size)
-
     symbol = order_data.get("symbol", "")
     raw_exchange = order_data.get("exchange", "")
     exchange = normalize_exchange_segment(raw_exchange, symbol)
+    base_qty = int(order_data.get("quantity", 1))
+    lot_size = int(order_data.get("lot_size", 1))
+    child_qty = calculate_child_quantity(account, base_qty, lot_size, symbol=symbol, exchange=exchange)
     action = order_data.get("action", "BUY").upper()
     pricetype = order_data.get("pricetype", "MARKET").upper()
     product = order_data.get("product", "MIS").upper()

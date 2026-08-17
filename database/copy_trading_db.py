@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    event,
     func,
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -36,8 +37,20 @@ DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///db/openalgo.db"
 engine = create_engine(
     DATABASE_URL,
     poolclass=NullPool,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
+    connect_args={"check_same_thread": False, "timeout": 15} if "sqlite" in DATABASE_URL else {},
 )
+
+if "sqlite" in DATABASE_URL:
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=15000")
+            cursor.close()
+        except Exception:
+            pass
 
 SessionFactory = sessionmaker(bind=engine)
 Session = scoped_session(SessionFactory)
@@ -182,7 +195,7 @@ class CopyOrder(Base):
     __tablename__ = "copy_orders"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    account_id = Column(Integer, ForeignKey("copy_accounts.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("copy_accounts.id", ondelete="CASCADE"), nullable=False, index=True)
     master_order_id = Column(String(100), nullable=True, index=True)
     child_order_id = Column(String(100), nullable=True, index=True)
     strategy = Column(String(100), nullable=True)

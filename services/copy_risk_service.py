@@ -175,33 +175,37 @@ def squareoff_single_account(account: Dict[str, Any]) -> Dict[str, Any]:
                         exit_action = "SELL" if net_qty > 0 else "BUY"
                         exit_qty = abs(net_qty)
 
-                        exit_payload = {
-                            "exchangeSegment": exchange,
-                            "exchangeInstrumentID": token_id,
-                            "productType": str(p.get("ProductType", "MIS")),
-                            "orderType": "MARKET",
-                            "orderSide": exit_action,
-                            "timeInForce": "DAY",
-                            "disclosedQuantity": 0,
-                            "orderQuantity": exit_qty,
-                            "limitPrice": 0.0,
-                            "stopPrice": 0.0,
-                            "orderUniqueIdentifier": f"SQ_{account_id}_{int(time.time()*1000)}",
-                        }
+                        from services.copy_trading_service import slice_order_quantities
+                        exit_slices = slice_order_quantities(exit_qty, symbol, exchange)
 
-                        exit_resp = requests.post(f"{INTERACTIVE_URL}/orders", json=exit_payload, headers=headers, timeout=4)
-                        if exit_resp.status_code == 200:
-                            closed_positions.append(f"{symbol} ({exit_action} {exit_qty})")
-                            record_copy_order(
-                                account_id=account_id,
-                                symbol=symbol,
-                                exchange=exchange,
-                                action=exit_action,
-                                quantity=exit_qty,
-                                pricetype="MARKET",
-                                status="placed",
-                                message="Emergency Square-Off",
-                            )
+                        for chunk_qty in exit_slices:
+                            exit_payload = {
+                                "exchangeSegment": exchange,
+                                "exchangeInstrumentID": token_id,
+                                "productType": str(p.get("ProductType", "MIS")),
+                                "orderType": "MARKET",
+                                "orderSide": exit_action,
+                                "timeInForce": "DAY",
+                                "disclosedQuantity": 0,
+                                "orderQuantity": chunk_qty,
+                                "limitPrice": 0.0,
+                                "stopPrice": 0.0,
+                                "orderUniqueIdentifier": f"SQ_{account_id}_{int(time.time()*1000)}",
+                            }
+
+                            exit_resp = requests.post(f"{INTERACTIVE_URL}/orders", json=exit_payload, headers=headers, timeout=4)
+                            if exit_resp.status_code == 200:
+                                closed_positions.append(f"{symbol} ({exit_action} {chunk_qty})")
+                                record_copy_order(
+                                    account_id=account_id,
+                                    symbol=symbol,
+                                    exchange=exchange,
+                                    action=exit_action,
+                                    quantity=chunk_qty,
+                                    pricetype="MARKET",
+                                    status="placed",
+                                    message="Emergency Square-Off",
+                                )
     except Exception as e:
         logger.error(f"[Square-off] Error squaring off positions for {account_name}: {e}")
 

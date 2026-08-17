@@ -370,6 +370,41 @@ def list_copy_orders():
 # Webhook Signal Ingestion (TradingView / Python)
 # =====================================================================
 
+def is_authenticated_webhook(data: dict) -> bool:
+    """Verify request via active session, X-API-Key header, or payload apikey."""
+    try:
+        from utils.session import is_session_valid
+        if is_session_valid():
+            return True
+    except Exception:
+        pass
+
+    api_key = (
+        data.get("apikey")
+        or request.headers.get("X-API-Key")
+        or request.headers.get("Authorization")
+    )
+    if api_key:
+        if api_key.startswith("Bearer "):
+            api_key = api_key[7:].strip()
+        try:
+            from database.auth_db import verify_api_key
+            user_id = verify_api_key(api_key)
+            if user_id:
+                return True
+        except Exception:
+            pass
+
+    try:
+        from database.auth_db import get_first_available_api_key
+        if not get_first_available_api_key():
+            return True  # Fresh instance before key generation
+    except Exception:
+        return True
+
+    return False
+
+
 @copy_trading_bp.route("/webhook", methods=["POST"])
 def copy_webhook():
     """
@@ -380,17 +415,46 @@ def copy_webhook():
     if not data:
         return jsonify({"status": "error", "message": "Invalid or missing JSON payload"}), 400
 
-    symbol = data.get("symbol")
-    action = data.get("action")
-    quantity = data.get("quantity")
+    # 1. Security & Authentication Check
+    if not is_authenticated_webhook(data):
+        return jsonify({"status": "error", "message": "Unauthorized: Invalid or missing API key"}), 401
 
-    if not symbol or not action or not quantity:
+    # 2. Strict Input Validation
+    symbol = (data.get("symbol") or "").strip().upper()
+    action = (data.get("action") or "").strip().upper()
+    raw_qty = data.get("quantity")
+
+    if not symbol or not action or raw_qty is None:
         return jsonify({"status": "error", "message": "symbol, action, and quantity are required"}), 400
 
+    if action not in ["BUY", "SELL"]:
+        return jsonify({"status": "error", "message": "action must be BUY or SELL"}), 400
+
     try:
-        quantity = int(quantity)
+        quantity = int(raw_qty)
+        if quantity <= 0:
+            return jsonify({"status": "error", "message": "quantity must be greater than zero"}), 400
     except (ValueError, TypeError):
-        return jsonify({"status": "error", "message": "quantity must be an integer"}), 400
+        return jsonify({"status": "error", "message": "quantity must be a positive integer"}), 400
+
+    data["symbol"] = symbol
+    data["action"] = action
+    data["quantity"] = quantity
+
+    # Sanitize pricetype & product
+    pricetype = (data.get("pricetype") or "MARKET").strip().upper()
+    if pricetype not in ["MARKET", "LIMIT", "SL", "SL-M"]:
+        pricetype = "MARKET"
+    data["pricetype"] = pricetype
+
+    product = (data.get("product") or "MIS").strip().upper()
+    if product not in ["MIS", "NRML", "CNC"]:
+        product = "MIS"
+    data["product"] = product
+
+    # Sanitize strategy tag if provided
+    if data.get("strategy"):
+        data["strategy"] = str(data["strategy"]).strip().upper().replace(" ", "_")
 
     # Broadcast signal in parallel with dynamic strategy routing
     result = broadcast_copy_order(data)
