@@ -55,43 +55,27 @@ BASE_URL="${BASE_URL:-$BROKER_BASE_URL}"
 BASE_URL=${BASE_URL:-https://symphony.acagarwal.com:3000}
 
 # Read Admin Portal Credentials
-if [ -z "$ADMIN_USERNAME" ]; then
-  read -p "Enter Admin Portal Username [default: admin]: " ADMIN_USERNAME
-  ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-fi
+read -p "Enter Admin Portal Username [default: admin]: " ADMIN_USERNAME < /dev/tty || true
+ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
 
-if [ -z "$ADMIN_PASSWORD" ]; then
-  read -sp "Enter Admin Portal Password [default: Admin@12345]: " ADMIN_PASSWORD
-  echo ""
-  ADMIN_PASSWORD=${ADMIN_PASSWORD:-Admin@12345}
-fi
+read -sp "Enter Admin Portal Password [default: Admin@12345]: " ADMIN_PASSWORD < /dev/tty || true
+echo ""
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-Admin@12345}
 
 # Read Server IP / Domain
-if [ -z "$STATIC_IP" ]; then
-  read -p "Enter Server Public IP / Domain [default: $AUTO_DETECTED_IP]: " STATIC_IP
-  STATIC_IP=${STATIC_IP:-$AUTO_DETECTED_IP}
-fi
+read -p "Enter Server Public IP / Domain [default: $AUTO_DETECTED_IP]: " STATIC_IP < /dev/tty || true
+STATIC_IP=${STATIC_IP:-$AUTO_DETECTED_IP}
 
 # Read Broker API Credentials
-if [ -z "$USER_ID" ]; then
-  read -p "Enter AC Agarwal User ID (Client Code, e.g. DM933): " USER_ID
-fi
+read -p "Enter AC Agarwal User ID (Client Code, e.g. DM933): " USER_ID < /dev/tty || true
 
-if [ -z "$API_KEY" ]; then
-  read -p "Enter Interactive API Key (BROKER_API_KEY): " API_KEY
-fi
+read -p "Enter Interactive API Key (BROKER_API_KEY): " API_KEY < /dev/tty || true
 
-if [ -z "$API_SECRET" ]; then
-  read -p "Enter Interactive API Secret (BROKER_API_SECRET): " API_SECRET
-fi
+read -p "Enter Interactive API Secret (BROKER_API_SECRET): " API_SECRET < /dev/tty || true
 
-if [ -z "$API_KEY_MARKET" ]; then
-  read -p "Enter Market Data API Key (BROKER_API_KEY_MARKET): " API_KEY_MARKET
-fi
+read -p "Enter Market Data API Key (BROKER_API_KEY_MARKET): " API_KEY_MARKET < /dev/tty || true
 
-if [ -z "$API_SECRET_MARKET" ]; then
-  read -p "Enter Market Data API Secret (BROKER_API_SECRET_MARKET): " API_SECRET_MARKET
-fi
+read -p "Enter Market Data API Secret (BROKER_API_SECRET_MARKET): " API_SECRET_MARKET < /dev/tty || true
 
 # ------------------------------------------------------------------------------
 # Step 2: Install Ubuntu Packages
