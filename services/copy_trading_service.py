@@ -929,13 +929,14 @@ def _heartbeat_worker():
                         token = _TOKEN_CACHE.get(acc["id"], {}).get("token") or acc.get("auth_token")
                         if token:
                             b_url = f"{INTERACTIVE_URL}/user/balance"
-                            headers = {"Authorization": token}
-                            b_resp = requests.get(b_url, headers=headers, timeout=3)
+                            headers = {"Authorization": token, "authorization": token, "Content-Type": "application/json"}
+                            b_resp = requests.get(b_url, headers=headers, timeout=4)
                             if b_resp.status_code == 200:
                                 b_data = b_resp.json()
-                                res = b_data.get("result", {})
-                                funds = float(res.get("availableBalance", res.get("cash", 0.0)))
-                                update_account_status(acc["id"], "connected", funds=funds)
+                                from services.copy_risk_service import extract_xts_available_margin
+                                funds = extract_xts_available_margin(b_data)
+                                if funds > 0:
+                                    update_account_status(acc["id"], "connected", funds=funds)
                     except Exception as ex:
                         logger.debug(f"[Copy Heartbeat] Staggered sync for account {acc.get('client_code')}: {ex}")
         except Exception as e:

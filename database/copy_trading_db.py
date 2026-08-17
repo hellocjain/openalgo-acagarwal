@@ -549,7 +549,9 @@ def update_account_status(
             if auth_token:
                 account.set_auth_token(auth_token)
             if funds is not None:
-                account.last_funds = float(funds)
+                f_val = float(funds)
+                if f_val > 0 or not account.last_funds:
+                    account.last_funds = f_val
             if pnl is not None:
                 account.last_pnl = float(pnl)
             session.commit()
