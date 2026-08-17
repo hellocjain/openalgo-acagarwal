@@ -310,6 +310,17 @@ def remove_strategy(strategy_id: int):
     return jsonify(res)
 
 
+@copy_trading_bp.route("/strategies/toggle/<int:strategy_id>", methods=["POST"])
+def toggle_strategy_route(strategy_id: int):
+    """Toggle active status for a strategy."""
+    strat = get_strategy_by_id(strategy_id)
+    if not strat:
+        return jsonify({"status": "error", "message": "Strategy not found"}), 404
+    new_active = not strat.get("is_active", True)
+    res = update_strategy(strategy_id=strategy_id, is_active=new_active)
+    return jsonify(res)
+
+
 @copy_trading_bp.route("/accounts/<int:account_id>/assign-strategy", methods=["POST"])
 def assign_strategy(account_id: int):
     """Assign a strategy to a client account with custom multiplier and risk bounds."""

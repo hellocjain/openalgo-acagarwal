@@ -849,6 +849,37 @@ if strategy.position_size != strategy.position_size[1]
     }
   }
 
+  const handleDeleteStrategy = async (id: number, name: string) => {
+    if (!confirm(`Are you sure you want to delete strategy '${name}'? This will remove all client subscriptions for this strategy.`)) return
+    try {
+      const res = await fetch(`/api/copy-trading/strategies/delete/${id}`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', `Strategy '${name}' deleted successfully`)
+        fetchSummaryAndAccounts()
+      } else {
+        showStatus('error', data.message || 'Failed to delete strategy')
+      }
+    } catch (e: any) {
+      showStatus('error', `Failed to delete strategy: ${e.message}`)
+    }
+  }
+
+  const handleToggleStrategy = async (id: number, currentActive: boolean) => {
+    try {
+      const res = await fetch(`/api/copy-trading/strategies/toggle/${id}`, { method: 'POST' })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', `Strategy ${currentActive ? 'paused' : 'activated'} successfully`)
+        fetchSummaryAndAccounts()
+      } else {
+        showStatus('error', data.message || 'Failed to toggle strategy')
+      }
+    } catch (e: any) {
+      showStatus('error', `Failed to toggle strategy: ${e.message}`)
+    }
+  }
+
   const handleSquareOffSingleClient = async (accountId: number, clientName: string) => {
     if (!confirm(`🚨 EMERGENCY: Square off all open positions and cancel orders for ${clientName}?`)) return
     try {
@@ -1255,15 +1286,31 @@ if strategy.position_size != strategy.position_size[1]
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {strategies.map((strat) => (
-              <Card key={strat.id} className="border shadow-sm">
+              <Card key={strat.id} className="border shadow-sm hover:shadow-md transition-shadow">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
-                    <Badge variant="outline" className="font-mono text-xs uppercase bg-muted">
+                    <Badge variant="outline" className="font-mono text-xs uppercase bg-muted font-bold text-blue-600 dark:text-blue-400">
                       {strat.strategy_tag}
                     </Badge>
-                    <Badge variant={strat.is_active ? 'default' : 'secondary'} className={strat.is_active ? 'bg-emerald-500' : ''}>
-                      {strat.is_active ? 'Active' : 'Paused'}
-                    </Badge>
+                    <div className="flex items-center gap-1.5">
+                      <Badge
+                        variant={strat.is_active ? 'default' : 'secondary'}
+                        className={`cursor-pointer text-[10px] ${strat.is_active ? 'bg-emerald-500 hover:bg-emerald-600' : 'hover:bg-muted'}`}
+                        title="Click to Toggle Active / Paused"
+                        onClick={() => handleToggleStrategy(strat.id, strat.is_active)}
+                      >
+                        {strat.is_active ? '● Active' : '○ Paused'}
+                      </Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                        title="Delete Strategy"
+                        onClick={() => handleDeleteStrategy(strat.id, strat.strategy_name || strat.strategy_tag)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
                   <CardTitle className="text-base font-bold mt-2">{strat.strategy_name}</CardTitle>
                   <CardDescription className="text-xs flex items-center gap-1.5 flex-wrap">
