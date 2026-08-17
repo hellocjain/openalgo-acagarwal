@@ -2674,8 +2674,12 @@ if strategy.position_size != strategy.position_size[1]
                                 {sub.client_code}
                               </Badge>
                             </div>
-                            <div className="text-[11px] text-muted-foreground">
-                              Status: {sub.is_account_active ? 'Active' : 'Disabled'}
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                              <span>Status:</span>
+                              <span className={`inline-flex items-center gap-1 font-medium ${sub.is_subscribed || sub.is_account_active ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${sub.is_subscribed || sub.is_account_active ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                                {sub.is_subscribed || sub.is_account_active ? 'Active' : 'Disabled (Will Auto-Activate on Save)'}
+                              </span>
                             </div>
                           </TableCell>
 

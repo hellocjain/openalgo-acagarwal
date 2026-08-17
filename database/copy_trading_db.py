@@ -976,7 +976,10 @@ def get_active_subscribers_for_strategy_tag(strategy_tag: str) -> List[Dict[str,
         subscribers = []
         for m in mappings:
             acc = m.account
-            if acc and acc.is_active and not acc.daily_loss_triggered:
+            if acc and not acc.daily_loss_triggered:
+                if not acc.is_active:
+                    acc.is_active = True
+                    session.commit()
                 acc_dict = acc.to_dict(include_secrets=True)
                 acc_dict["strategy_multiplier"] = m.multiplier
                 acc_dict["strategy_fixed_qty"] = m.fixed_qty
@@ -1023,6 +1026,11 @@ def bulk_assign_subscribers_to_strategy(
             fixed_qty = int(sub.get("fixed_qty", 0))
             max_daily_loss = float(sub.get("max_daily_loss", 5000.0))
             is_active = bool(sub.get("is_active", True))
+
+            # Auto-activate account if it is being subscribed
+            acc_obj = session.query(CopyAccount).filter_by(id=acc_id).first()
+            if acc_obj and is_active:
+                acc_obj.is_active = True
 
             existing = session.query(ClientStrategyMapping).filter_by(
                 account_id=acc_id, strategy_id=strategy_id
