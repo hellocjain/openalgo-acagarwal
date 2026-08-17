@@ -44,7 +44,7 @@ export function Footer({ className }: FooterProps) {
             </a>
           </div>
           <span className="hidden md:inline">|</span>
-          <span className="text-center">Open Source Algo Platform for Everyone</span>
+          <span className="text-center">CJAlgo - Algorithmic Trading Platform</span>
           <span className="hidden md:inline">|</span>
           {version && (
             <Badge variant="secondary" className="gap-1">

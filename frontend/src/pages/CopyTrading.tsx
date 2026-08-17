@@ -338,7 +338,7 @@ export default function CopyTrading() {
   const generatePineScriptCode = () => {
     return `//@version=5
 // ==============================================================================
-// OpenAlgo Multi-Account Copy Trading Webhook Alert Generator (Pine Script v5)
+// CJAlgo Multi-Account Copy Trading Webhook Alert Generator (Pine Script v5)
 // ==============================================================================
 // Strategy Tag : ${jsonConfig.strategy_tag}
 // Exchange     : ${jsonConfig.exchange}
