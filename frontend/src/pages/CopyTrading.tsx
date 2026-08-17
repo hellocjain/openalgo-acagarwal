@@ -2,12 +2,14 @@ import {
   Activity,
   AlertCircle,
   AlertTriangle,
+  BarChart3,
   Check,
   CheckCircle2,
   Clock,
   Code2,
   Copy,
   Download,
+  FileText,
   Flame,
   Layers,
   Plus,
@@ -532,6 +534,26 @@ if strategy.position_size != strategy.position_size[1]
       showStatus('error', `Error saving subscribers: ${e.message}`)
     } finally {
       setSavingSubscribers(false)
+    }
+  }
+
+  const handleQuickUpdateTimeframe = async (strategyId: number, currentTf: string) => {
+    const newTf = prompt('Enter strategy timeframe (e.g. 10s, 30s, 1m, 5m, 15m, 1h, Daily):', currentTf || '10s')
+    if (newTf && newTf.trim()) {
+      try {
+        const res = await fetch(`/api/copy-trading/strategies/update/${strategyId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ timeframe: newTf.trim() }),
+        })
+        const data = await res.json()
+        if (data.status === 'success') {
+          showStatus('success', `Strategy timeframe updated to ${newTf.trim()}!`)
+          fetchSummaryAndAccounts()
+        }
+      } catch (e: any) {
+        showStatus('error', `Failed to update timeframe: ${e.message}`)
+      }
     }
   }
 
@@ -1244,8 +1266,18 @@ if strategy.position_size != strategy.position_size[1]
                     </Badge>
                   </div>
                   <CardTitle className="text-base font-bold mt-2">{strat.strategy_name}</CardTitle>
-                  <CardDescription className="text-xs">
-                    Segment: <span className="font-semibold text-foreground">{strat.segment}</span> • Timeframe: <span className="font-semibold text-foreground">{strat.timeframe}</span>
+                  <CardDescription className="text-xs flex items-center gap-1.5 flex-wrap">
+                    <span>Segment: <span className="font-semibold text-foreground">{strat.segment}</span></span>
+                    <span>•</span>
+                    <span>Timeframe:</span>
+                    <Badge
+                      variant="outline"
+                      className="cursor-pointer text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50/60 hover:bg-blue-100 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800"
+                      title="Click to change timeframe"
+                      onClick={() => handleQuickUpdateTimeframe(strat.id, strat.timeframe || '10s')}
+                    >
+                      {strat.timeframe || '10s'} ✏️
+                    </Badge>
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pb-3 text-xs space-y-2">
@@ -2079,21 +2111,23 @@ if strategy.position_size != strategy.position_size[1]
 
       {/* Pro Interactive TradingView Alert JSON & Pine Script Studio Modal */}
       <Dialog open={isJsonGeneratorOpen} onOpenChange={setIsJsonGeneratorOpen}>
-        <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Code2 className="h-5 w-5 text-blue-500" />
+        <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto p-6">
+          <DialogHeader className="border-b pb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  <Code2 className="h-5 w-5" />
+                </div>
                 <div>
                   <DialogTitle className="text-lg font-bold">
-                    TradingView Webhook & Pine Script Studio
+                    TradingView Webhook & Signal Studio
                   </DialogTitle>
-                  <DialogDescription className="text-xs mt-0.5">
-                    Generate customizable, non-hardcoded JSON alerts and copy-pasteable Pine Script v5 code.
+                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+                    Generate dynamic, non-hardcoded JSON alerts and copy-pasteable Pine Script v5 code.
                   </DialogDescription>
                 </div>
               </div>
-              <Badge variant="outline" className="font-mono text-xs text-blue-600 bg-blue-50 dark:bg-blue-950/40">
+              <Badge variant="outline" className="font-mono text-xs font-bold text-blue-600 bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800 self-start sm:self-center">
                 Strategy: {jsonConfig.strategy_tag}
               </Badge>
             </div>
@@ -2102,354 +2136,336 @@ if strategy.position_size != strategy.position_size[1]
           <Tabs
             value={jsonConfig.mode}
             onValueChange={(val: any) => setJsonConfig({ ...jsonConfig, mode: val })}
-            className="w-full"
+            className="w-full mt-2"
           >
-            <TabsList className="grid grid-cols-4 w-full text-xs">
-              <TabsTrigger value="strategy" className="text-xs gap-1">
-                Strategy Alert (strategy())
+            <TabsList className="grid grid-cols-2 sm:grid-cols-4 w-full h-auto p-1 bg-muted/60">
+              <TabsTrigger value="strategy" className="text-xs py-2 gap-1.5 font-medium">
+                <Zap className="h-3.5 w-3.5 text-amber-500" /> Strategy Alert
               </TabsTrigger>
-              <TabsTrigger value="indicator" className="text-xs gap-1">
-                Study / Condition Alert
+              <TabsTrigger value="indicator" className="text-xs py-2 gap-1.5 font-medium">
+                <BarChart3 className="h-3.5 w-3.5 text-blue-500" /> Condition Alert
               </TabsTrigger>
-              <TabsTrigger value="pinescript" className="text-xs gap-1">
-                Pine Script v5 Code
+              <TabsTrigger value="pinescript" className="text-xs py-2 gap-1.5 font-medium">
+                <Code2 className="h-3.5 w-3.5 text-emerald-500" /> Pine Script v5
               </TabsTrigger>
-              <TabsTrigger value="direct_client" className="text-xs gap-1">
-                Direct Single Client
+              <TabsTrigger value="direct_client" className="text-xs py-2 gap-1.5 font-medium">
+                <Users className="h-3.5 w-3.5 text-purple-500" /> Direct Client
               </TabsTrigger>
             </TabsList>
 
-            <div className="grid gap-3.5 py-3 text-xs">
-              {/* Row 1: Strategy Tag / Client Code & Segment */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {jsonConfig.mode === 'direct_client' ? (
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold">Target Client Code</Label>
+            {/* 2-Column Responsive Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 pt-4 text-xs">
+              {/* Left Column (7 cols): Configuration Form */}
+              <div className="lg:col-span-7 space-y-4">
+                {/* Row 1: Target Strategy Tag / Client Code & Segment */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {jsonConfig.mode === 'direct_client' ? (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Target Client Code</Label>
+                      <Input
+                        placeholder="e.g. DM933"
+                        value={jsonConfig.client_code}
+                        onChange={(e) => setJsonConfig({ ...jsonConfig, client_code: e.target.value.toUpperCase() })}
+                        className="font-mono text-xs"
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Target Strategy Tag</Label>
+                      <Select
+                        value={jsonConfig.strategy_tag}
+                        onValueChange={(val) => {
+                          const strat = strategies.find(s => s.strategy_tag === val)
+                          setJsonConfig({
+                            ...jsonConfig,
+                            strategy_tag: val,
+                            exchange: strat?.segment || jsonConfig.exchange,
+                          })
+                        }}
+                      >
+                        <SelectTrigger className="text-xs font-mono font-bold">
+                          <SelectValue placeholder="Select Strategy" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {strategies.map((s) => (
+                            <SelectItem key={s.id} value={s.strategy_tag}>
+                              {s.strategy_tag} ({s.strategy_name})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Exchange Segment</Label>
+                    <Select
+                      value={jsonConfig.exchange}
+                      onValueChange={(val) => setJsonConfig({ ...jsonConfig, exchange: val })}
+                    >
+                      <SelectTrigger className="text-xs font-mono">
+                        <SelectValue placeholder="Exchange" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MCXFO">MCXFO (Commodities)</SelectItem>
+                        <SelectItem value="NSEFO">NSEFO (NSE Futures & Options)</SelectItem>
+                        <SelectItem value="NSECM">NSECM (NSE Equities Cash)</SelectItem>
+                        <SelectItem value="BSEFO">BSEFO (BSE Derivatives)</SelectItem>
+                        <SelectItem value="BSECM">BSECM (BSE Equities Cash)</SelectItem>
+                        <SelectItem value="CDS">CDS (Currency Derivatives)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Row 2: Product Type & Price Type */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg border bg-muted/20">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-foreground">
+                      Product Type (Order Mode)
+                    </Label>
+                    <Select
+                      value={jsonConfig.product}
+                      onValueChange={(val) => setJsonConfig({ ...jsonConfig, product: val })}
+                    >
+                      <SelectTrigger className="text-xs font-mono font-semibold">
+                        <SelectValue placeholder="Product Type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MIS">MIS (Intraday with Leverage)</SelectItem>
+                        <SelectItem value="NRML">NRML (Normal Carryforward F&O)</SelectItem>
+                        <SelectItem value="CNC">CNC (Cash & Carry Delivery)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-foreground">
+                      Execution Price Type
+                    </Label>
+                    <Select
+                      value={jsonConfig.pricetype}
+                      onValueChange={(val) => setJsonConfig({ ...jsonConfig, pricetype: val })}
+                    >
+                      <SelectTrigger className="text-xs font-mono font-semibold">
+                        <SelectValue placeholder="Order Type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MARKET">MARKET (Immediate Market Price)</SelectItem>
+                        <SelectItem value="LIMIT">LIMIT (Limit Price)</SelectItem>
+                        <SelectItem value="SL-M">SL-M (Stop Loss Market)</SelectItem>
+                        <SelectItem value="SL-L">SL-L (Stop Loss Limit)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Row 3: Symbol & Action */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Symbol / Ticker</Label>
                     <Input
-                      placeholder="e.g. DM933"
-                      value={jsonConfig.client_code}
-                      onChange={(e) => setJsonConfig({ ...jsonConfig, client_code: e.target.value.toUpperCase() })}
+                      placeholder="e.g. {{ticker}} or SILVERMIC"
+                      value={jsonConfig.symbol}
+                      onChange={(e) => setJsonConfig({ ...jsonConfig, symbol: e.target.value })}
                       className="font-mono text-xs"
                     />
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {['{{ticker}}', 'SILVERMIC', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLD', 'NIFTY', 'BANKNIFTY'].map((sym) => (
+                        <Badge
+                          key={sym}
+                          variant={jsonConfig.symbol === sym ? 'default' : 'outline'}
+                          className="cursor-pointer text-[10px] px-1.5 py-0 hover:bg-muted"
+                          onClick={() => setJsonConfig({ ...jsonConfig, symbol: sym })}
+                        >
+                          {sym}
+                        </Badge>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold">Target Strategy Tag</Label>
-                    <Select
-                      value={jsonConfig.strategy_tag}
-                      onValueChange={(val) => {
-                        const strat = strategies.find(s => s.strategy_tag === val)
-                        setJsonConfig({
-                          ...jsonConfig,
-                          strategy_tag: val,
-                          exchange: strat?.segment || jsonConfig.exchange,
-                        })
-                      }}
-                    >
-                      <SelectTrigger className="text-xs font-mono font-bold">
-                        <SelectValue placeholder="Select Strategy" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {strategies.map((s) => (
-                          <SelectItem key={s.id} value={s.strategy_tag}>
-                            {s.strategy_tag} ({s.strategy_name})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
 
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold">Exchange Segment</Label>
-                  <Select
-                    value={jsonConfig.exchange}
-                    onValueChange={(val) => setJsonConfig({ ...jsonConfig, exchange: val })}
-                  >
-                    <SelectTrigger className="text-xs font-mono">
-                      <SelectValue placeholder="Exchange" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MCXFO">MCXFO (Commodities - Crude, Silver, Gold, NatGas)</SelectItem>
-                      <SelectItem value="NSEFO">NSEFO (NSE Futures & Options - Nifty, BankNifty)</SelectItem>
-                      <SelectItem value="NSECM">NSECM (NSE Equities Cash / Stocks)</SelectItem>
-                      <SelectItem value="BSEFO">BSEFO (BSE Derivatives - Sensex, Bankex)</SelectItem>
-                      <SelectItem value="BSECM">BSECM (BSE Equities Cash)</SelectItem>
-                      <SelectItem value="CDS">CDS (Currency Derivatives - USDINR)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Row 2: Product Type & Price Type (Fully non-hardcoded) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 rounded-lg border bg-muted/20">
-                <div className="space-y-1">
-                  <Label className="text-xs font-bold text-foreground">
-                    Product Type (Order Sizing & Margin Mode)
-                  </Label>
-                  <Select
-                    value={jsonConfig.product}
-                    onValueChange={(val) => setJsonConfig({ ...jsonConfig, product: val })}
-                  >
-                    <SelectTrigger className="text-xs font-mono font-semibold">
-                      <SelectValue placeholder="Product Type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MIS">MIS (Intraday with Leverage & Auto Square-Off)</SelectItem>
-                      <SelectItem value="NRML">NRML (Normal Carryforward for F&O & Commodities)</SelectItem>
-                      <SelectItem value="CNC">CNC (Cash & Carry Delivery for Equities)</SelectItem>
-                      <SelectItem value="CO">CO (Cover Order with Stop Loss)</SelectItem>
-                      <SelectItem value="BO">BO (Bracket Order with Target & Stop Loss)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs font-bold text-foreground">
-                    Price Type (Order Execution Type)
-                  </Label>
-                  <Select
-                    value={jsonConfig.pricetype}
-                    onValueChange={(val) => setJsonConfig({ ...jsonConfig, pricetype: val })}
-                  >
-                    <SelectTrigger className="text-xs font-mono font-semibold">
-                      <SelectValue placeholder="Order Type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MARKET">MARKET (Execute immediately at current market price)</SelectItem>
-                      <SelectItem value="LIMIT">LIMIT (Execute at limit price or better)</SelectItem>
-                      <SelectItem value="SL-M">SL-M (Stop Loss Market with Trigger Price)</SelectItem>
-                      <SelectItem value="SL-L">SL-L (Stop Loss Limit with Price & Trigger Price)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Row 3: Symbol & Action */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold">Symbol (Contract / Ticker)</Label>
-                  <Input
-                    placeholder="e.g. {{ticker}} or SILVERMIC24AUGFUT"
-                    value={jsonConfig.symbol}
-                    onChange={(e) => setJsonConfig({ ...jsonConfig, symbol: e.target.value })}
-                    className="font-mono text-xs"
-                  />
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {['{{ticker}}', 'SILVERMIC', 'SILVER', 'CRUDEOIL', 'NATURALGAS', 'GOLD', 'NIFTY', 'BANKNIFTY', 'SENSEX'].map((sym) => (
-                      <Badge
-                        key={sym}
-                        variant={jsonConfig.symbol === sym ? 'default' : 'outline'}
-                        className="cursor-pointer text-[10px] px-1.5 py-0 hover:bg-muted"
-                        onClick={() => setJsonConfig({ ...jsonConfig, symbol: sym })}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Action</Label>
+                    {jsonConfig.mode === 'strategy' ? (
+                      <Select
+                        value={jsonConfig.action}
+                        onValueChange={(val) => setJsonConfig({ ...jsonConfig, action: val })}
                       >
-                        {sym}
-                      </Badge>
-                    ))}
+                        <SelectTrigger className="text-xs font-mono font-bold">
+                          <SelectValue placeholder="Action" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="{{strategy.order.action}}">{'{{strategy.order.action}} (Dynamic)'}</SelectItem>
+                          <SelectItem value="BUY">BUY</SelectItem>
+                          <SelectItem value="SELL">SELL</SelectItem>
+                          <SelectItem value="SQUAREOFF">SQUAREOFF (Close Position)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Select
+                        value={jsonConfig.action.includes('{{') ? 'BUY' : jsonConfig.action}
+                        onValueChange={(val) => setJsonConfig({ ...jsonConfig, action: val })}
+                      >
+                        <SelectTrigger className="text-xs font-mono font-bold">
+                          <SelectValue placeholder="Action" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="BUY">BUY (Long Entry / Short Exit)</SelectItem>
+                          <SelectItem value="SELL">SELL (Short Entry / Long Exit)</SelectItem>
+                          <SelectItem value="SQUAREOFF">SQUAREOFF (Flat Position)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold">Action</Label>
-                  {jsonConfig.mode === 'strategy' ? (
-                    <Select
-                      value={jsonConfig.action}
-                      onValueChange={(val) => setJsonConfig({ ...jsonConfig, action: val })}
-                    >
-                      <SelectTrigger className="text-xs font-mono font-bold">
-                        <SelectValue placeholder="Action" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="{{strategy.order.action}}">{'{{strategy.order.action}} (Dynamic from Strategy)'}</SelectItem>
-                        <SelectItem value="BUY">BUY</SelectItem>
-                        <SelectItem value="SELL">SELL</SelectItem>
-                        <SelectItem value="SQUAREOFF">SQUAREOFF (Close Open Positions)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Select
-                      value={jsonConfig.action.includes('{{') ? 'BUY' : jsonConfig.action}
-                      onValueChange={(val) => setJsonConfig({ ...jsonConfig, action: val })}
-                    >
-                      <SelectTrigger className="text-xs font-mono font-bold">
-                        <SelectValue placeholder="Action" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="BUY">BUY (Long Entry / Short Exit)</SelectItem>
-                        <SelectItem value="SELL">SELL (Short Entry / Long Exit)</SelectItem>
-                        <SelectItem value="SQUAREOFF">SQUAREOFF (Exit & Flat Position)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              </div>
+                {/* Row 4: Quantity & Limit Price */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold">Quantity / Multiplier Units</Label>
+                    <Input
+                      placeholder="e.g. {{strategy.order.contracts}} or 1"
+                      value={jsonConfig.quantity}
+                      onChange={(e) => setJsonConfig({ ...jsonConfig, quantity: e.target.value })}
+                      className="font-mono text-xs"
+                    />
+                    <span className="text-[10px] text-muted-foreground">
+                      Client multipliers will scale this base quantity automatically.
+                    </span>
+                  </div>
 
-              {/* Row 4: Quantity & Price / Trigger Controls */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold">Quantity / Lot Multiplier Units</Label>
-                  <Input
-                    placeholder="e.g. {{strategy.order.contracts}} or 1"
-                    value={jsonConfig.quantity}
-                    onChange={(e) => setJsonConfig({ ...jsonConfig, quantity: e.target.value })}
-                    className="font-mono text-xs"
-                  />
-                  <span className="text-[10px] text-muted-foreground">
-                    Child accounts multiply this base quantity by their individual multiplier (e.g. 2.0x, 0.5x).
-                  </span>
-                </div>
-
-                {jsonConfig.pricetype !== 'MARKET' ? (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
+                  {jsonConfig.pricetype !== 'MARKET' ? (
+                    <div className="space-y-1.5">
                       <Label className="text-xs font-semibold">Limit Price</Label>
                       <Input
-                        placeholder="{{close}} or 6500"
+                        placeholder="{{close}} or limit price"
                         value={jsonConfig.price}
                         onChange={(e) => setJsonConfig({ ...jsonConfig, price: e.target.value })}
                         className="font-mono text-xs"
                       />
                     </div>
-                    {(jsonConfig.pricetype === 'SL-M' || jsonConfig.pricetype === 'SL-L') && (
-                      <div className="space-y-1">
-                        <Label className="text-xs font-semibold">Trigger Price</Label>
-                        <Input
-                          placeholder="e.g. 6490"
-                          value={jsonConfig.trigger_price}
-                          onChange={(e) => setJsonConfig({ ...jsonConfig, trigger_price: e.target.value })}
-                          className="font-mono text-xs"
-                        />
+                  ) : (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Execution Price</Label>
+                      <Input
+                        disabled
+                        value="Market Best Price ({{close}})"
+                        className="font-mono text-xs bg-muted/50 text-muted-foreground"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Smart Position Sizing Switch */}
+                {jsonConfig.mode === 'strategy' && (
+                  <div className="flex items-center justify-between p-3 rounded-lg border bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
+                    <div className="space-y-0.5 pr-2">
+                      <div className="font-semibold text-xs text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 text-blue-600" />
+                        Target Position Reconciliation ({'{{strategy.position_size}}'})
                       </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold">Market Execution Price</Label>
-                    <Input
-                      disabled
-                      value="Market Best Price ({{close}})"
-                      className="font-mono text-xs bg-muted/50 text-muted-foreground"
+                      <div className="text-[11px] text-muted-foreground leading-tight">
+                        Auto-reconciles position flips (+1 to -1) and closes (0) based on client live net positions.
+                      </div>
+                    </div>
+                    <Switch
+                      checked={jsonConfig.position_size}
+                      onCheckedChange={(checked) => setJsonConfig({ ...jsonConfig, position_size: checked })}
                     />
                   </div>
                 )}
               </div>
 
-              {/* Smart Position Sizing Toggle */}
-              {jsonConfig.mode === 'strategy' && (
-                <div className="flex items-center justify-between p-3 rounded-lg border bg-blue-50/50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900">
-                  <div className="space-y-0.5">
-                    <div className="font-semibold text-xs text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5 text-blue-600" />
-                      Smart Order Target Position Reconciliation ({'{{strategy.position_size}}'})
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Automatically reconciles position flips (+1 to -1) and squares off (0) based on each client's live broker net position.
-                    </div>
-                  </div>
-                  <Switch
-                    checked={jsonConfig.position_size}
-                    onCheckedChange={(checked) => setJsonConfig({ ...jsonConfig, position_size: checked })}
-                  />
-                </div>
-              )}
-
-              {/* View/Code Display */}
-              {jsonConfig.mode === 'pinescript' ? (
-                <div className="space-y-1.5 pt-1">
+              {/* Right Column (5 cols): Live Code Output & Webhook Details */}
+              <div className="lg:col-span-5 space-y-4 flex flex-col justify-between">
+                {/* Code Box */}
+                <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                      <Code2 className="h-3.5 w-3.5 text-blue-500" />
-                      Pine Script v5 Integration Code (Paste into your Strategy)
+                      {jsonConfig.mode === 'pinescript' ? <Code2 className="h-3.5 w-3.5 text-blue-500" /> : <FileText className="h-3.5 w-3.5 text-emerald-500" />}
+                      {jsonConfig.mode === 'pinescript' ? 'Pine Script v5 Code' : 'Alert Message JSON'}
                     </Label>
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700"
+                      className="h-7 text-xs gap-1 font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40"
                       onClick={() => {
-                        navigator.clipboard.writeText(generatePineScriptCode())
-                        setCopiedPineScript(true)
-                        showStatus('success', 'Pine Script Code copied!')
-                        setTimeout(() => setCopiedPineScript(false), 2000)
+                        const content = jsonConfig.mode === 'pinescript' ? generatePineScriptCode() : generateWebhookPayloadString()
+                        navigator.clipboard.writeText(content)
+                        if (jsonConfig.mode === 'pinescript') setCopiedPineScript(true)
+                        else setCopiedPayload(true)
+                        showStatus('success', 'Copied to clipboard!')
+                        setTimeout(() => {
+                          setCopiedPineScript(false)
+                          setCopiedPayload(false)
+                        }, 2000)
                       }}
                     >
-                      {copiedPineScript ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                      {copiedPineScript ? 'Copied Code!' : 'Copy Pine Script'}
+                      {(jsonConfig.mode === 'pinescript' ? copiedPineScript : copiedPayload) ? (
+                        <Check className="h-3.5 w-3.5 text-emerald-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      {(jsonConfig.mode === 'pinescript' ? copiedPineScript : copiedPayload) ? 'Copied!' : 'Copy Code'}
                     </Button>
                   </div>
-                  <pre className="bg-slate-950 text-sky-300 p-4 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed border border-slate-800 shadow-inner max-h-48">
-{generatePineScriptCode()}
+                  <pre className="bg-slate-950 text-emerald-400 p-3.5 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed border border-slate-800 shadow-inner max-h-56">
+                    {jsonConfig.mode === 'pinescript' ? generatePineScriptCode() : generateWebhookPayloadString()}
                   </pre>
                 </div>
-              ) : (
-                <div className="space-y-1.5 pt-1">
+
+                {/* Webhook Destination URL & Dry-Run Ping */}
+                <div className="space-y-2 p-3 rounded-lg border bg-muted/30">
                   <div className="flex items-center justify-between">
-                    <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      Generated TradingView Alert JSON Message
-                    </Label>
+                    <Label className="text-xs font-bold text-foreground">TradingView Webhook URL</Label>
+                    <Badge variant="outline" className="text-[10px] font-mono text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40">
+                      Port 80 Ready
+                    </Badge>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      readOnly
+                      value={`${window.location.protocol}//${window.location.hostname}/api/copy-trading/webhook`}
+                      className="font-mono text-xs bg-muted font-bold text-blue-600 dark:text-blue-400"
+                    />
                     <Button
-                      size="sm"
                       variant="outline"
-                      className="h-7 text-xs gap-1 text-blue-600 hover:text-blue-700"
+                      size="sm"
+                      className="gap-1 text-xs shrink-0"
                       onClick={() => {
-                        navigator.clipboard.writeText(generateWebhookPayloadString())
-                        setCopiedPayload(true)
-                        showStatus('success', 'Alert JSON Payload copied to clipboard!')
-                        setTimeout(() => setCopiedPayload(false), 2000)
+                        navigator.clipboard.writeText(`${window.location.protocol}//${window.location.hostname}/api/copy-trading/webhook`)
+                        showStatus('success', 'TradingView Webhook URL copied!')
                       }}
                     >
-                      {copiedPayload ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                      {copiedPayload ? 'Copied to Clipboard!' : 'Copy JSON'}
+                      <Copy className="h-3.5 w-3.5" /> Copy
                     </Button>
                   </div>
-                  <pre className="bg-slate-950 text-emerald-400 p-4 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed border border-slate-800 shadow-inner">
-{generateWebhookPayloadString()}
-                  </pre>
-                </div>
-              )}
 
-              {/* Webhook Destination URL & Dry Run Test Ping */}
-              <div className="space-y-1.5 pt-1">
-                <Label className="text-xs font-semibold">Webhook Destination URL</Label>
-                <div className="flex gap-2">
-                  <Input
-                    readOnly
-                    value={`${window.location.origin}/api/copy-trading/webhook`}
-                    className="font-mono text-xs bg-muted font-bold text-blue-600 dark:text-blue-400"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-xs shrink-0"
-                    onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}/api/copy-trading/webhook`)
-                      showStatus('success', 'Webhook Destination URL copied!')
-                    }}
-                  >
-                    <Copy className="h-3.5 w-3.5" /> Copy URL
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="gap-1.5 text-xs shrink-0 font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 hover:bg-amber-200"
-                    disabled={testPingRunning}
-                    onClick={handleTestWebhookSignal}
-                  >
-                    <Zap className="h-3.5 w-3.5 text-amber-600" />
-                    {testPingRunning ? 'Pinging...' : '⚡ Test Signal Ping'}
-                  </Button>
-                </div>
-
-                {testPingResult && (
-                  <div className={`p-2.5 rounded-lg border text-xs font-mono mt-2 ${testPingResult.data?.status === 'success' ? 'bg-emerald-50 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-200' : 'bg-rose-50 border-rose-300 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200'}`}>
-                    <div className="font-bold flex items-center justify-between">
-                      <span>Test Webhook Response ({testPingResult.status})</span>
-                      <span className="text-[10px] opacity-75">{testPingResult.timestamp}</span>
-                    </div>
-                    <pre className="mt-1 text-[11px] whitespace-pre-wrap">
-                      {JSON.stringify(testPingResult.data, null, 2)}
-                    </pre>
+                  <div className="pt-1">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full gap-1.5 text-xs font-semibold bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 hover:bg-amber-200"
+                      disabled={testPingRunning}
+                      onClick={handleTestWebhookSignal}
+                    >
+                      <Zap className="h-3.5 w-3.5 text-amber-600" />
+                      {testPingRunning ? 'Sending Simulated Signal...' : '⚡ Test Signal Ping (Dry-Run)'}
+                    </Button>
                   </div>
-                )}
+
+                  {testPingResult && (
+                    <div className={`p-2.5 rounded-lg border text-xs font-mono mt-2 ${testPingResult.data?.status === 'success' ? 'bg-emerald-50 border-emerald-300 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-200' : 'bg-rose-50 border-rose-300 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200'}`}>
+                      <div className="font-bold flex items-center justify-between">
+                        <span>Test Response ({testPingResult.status})</span>
+                        <span className="text-[10px] opacity-75">{testPingResult.timestamp}</span>
+                      </div>
+                      <pre className="mt-1 text-[11px] whitespace-pre-wrap">
+                        {JSON.stringify(testPingResult.data, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </Tabs>
@@ -2476,11 +2492,11 @@ if strategy.position_size != strategy.position_size[1]
                 onClick={() => {
                   navigator.clipboard.writeText(jsonConfig.mode === 'pinescript' ? generatePineScriptCode() : generateWebhookPayloadString())
                   setCopiedPayload(true)
-                  showStatus('success', 'Copied to clipboard!')
+                  showStatus('success', 'Alert Message copied to clipboard!')
                   setTimeout(() => setCopiedPayload(false), 2000)
                 }}
               >
-                <Check className="h-4 w-4" /> Copy Alert Payload
+                <Copy className="h-3.5 w-3.5" /> Copy Alert Payload
               </Button>
             </div>
           </DialogFooter>

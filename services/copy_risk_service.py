@@ -27,6 +27,74 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def extract_xts_available_margin(f_data: Dict[str, Any]) -> float:
+    """
+    Extract available cash margin from any AC Agarwal Symphony XTS response format.
+    Checks RMSSubLimits, RMSLimits, limitObject, and top-level response variations.
+    """
+    if not isinstance(f_data, dict):
+        return 0.0
+
+    result = f_data.get("result") or f_data
+    if not isinstance(result, dict):
+        return 0.0
+
+    # 1. Check BalanceList array (standard XTS RMSSubLimits)
+    bal_list = result.get("BalanceList") or []
+    if isinstance(bal_list, list) and len(bal_list) > 0:
+        for bal_item in bal_list:
+            if not isinstance(bal_item, dict):
+                continue
+            limit_obj = bal_item.get("limitObject") or {}
+            if isinstance(limit_obj, dict):
+                rms_sub = limit_obj.get("RMSSubLimits") or {}
+                if isinstance(rms_sub, dict):
+                    for k in ["netMarginAvailable", "marginAvailable", "availableMargin", "cashBalance", "clearBalance", "collateral", "adhocMargin"]:
+                        val = rms_sub.get(k)
+                        if val is not None:
+                            try:
+                                f_val = float(val)
+                                if f_val != 0.0:
+                                    return f_val
+                            except (ValueError, TypeError):
+                                pass
+
+                rms_lim = limit_obj.get("RMSLimits") or {}
+                if isinstance(rms_lim, dict):
+                    for k in ["netMarginAvailable", "marginAvailable", "availableMargin", "cashBalance", "clearBalance"]:
+                        val = rms_lim.get(k)
+                        if val is not None:
+                            try:
+                                f_val = float(val)
+                                if f_val != 0.0:
+                                    return f_val
+                            except (ValueError, TypeError):
+                                pass
+
+                for k in ["netMarginAvailable", "marginAvailable", "availableMargin", "cashBalance", "collateralValue", "specialLimit"]:
+                    val = limit_obj.get(k)
+                    if val is not None:
+                        try:
+                            f_val = float(val)
+                            if f_val != 0.0:
+                                return f_val
+                        except (ValueError, TypeError):
+                            pass
+
+    # 2. Check top-level result fields
+    for k in ["availablecash", "availableBalance", "availableMargin", "netMarginAvailable", "cash", "cashBalance", "ledgerBalance"]:
+        val = result.get(k)
+        if val is not None:
+            try:
+                f_val = float(val)
+                if f_val != 0.0:
+                    return f_val
+            except (ValueError, TypeError):
+                pass
+
+    return 0.0
+
+
 def fetch_account_funds_and_pnl(account: Dict[str, Any]) -> Dict[str, Any]:
     """Fetch live available funds and MTM PnL for a single child account from AC Agarwal."""
     account_id = account["id"]
@@ -34,7 +102,7 @@ def fetch_account_funds_and_pnl(account: Dict[str, Any]) -> Dict[str, Any]:
     if not success or not token:
         return {"account_id": account_id, "status": "error", "message": err, "funds": 0.0, "pnl": 0.0}
 
-    headers = {"Content-Type": "application/json", "Authorization": token}
+    headers = {"Content-Type": "application/json", "Authorization": token, "authorization": token}
     funds_url = f"{INTERACTIVE_URL}/user/balance"
     positions_url = f"{INTERACTIVE_URL}/portfolio/positions?dayOrNet=NetWise"
 
@@ -44,12 +112,11 @@ def fetch_account_funds_and_pnl(account: Dict[str, Any]) -> Dict[str, Any]:
 
     # 1. Fetch balance
     try:
-        f_resp = requests.get(funds_url, headers=headers, timeout=4)
+        f_resp = requests.get(funds_url, headers=headers, timeout=5)
         if f_resp.status_code == 200:
             f_data = f_resp.json()
-            if f_data.get("type") == "success":
-                result = f_data.get("result", {})
-                available_cash = float(result.get("BalanceList", [{}])[0].get("limitObject", {}).get("RMSSubLimits", {}).get("netMarginAvailable", 0.0) or 0.0)
+            available_cash = extract_xts_available_margin(f_data)
+            logger.info(f"[Risk] Fetched balance for {account['account_name']} ({account['client_code']}): Rs {available_cash:.2f}")
     except Exception as e:
         logger.error(f"[Risk] Error fetching balance for {account['account_name']}: {e}")
 
@@ -419,14 +486,13 @@ def run_premarket_fire_drill() -> Dict[str, Any]:
                 "latency_ms": round(acc_latency, 1),
             }
 
-        # Check balance
+        # Check balance using comprehensive parser
         funds = 0.0
         try:
-            b_resp = requests.get(f"{INTERACTIVE_URL}/user/balance", headers={"Authorization": token}, timeout=3)
+            b_resp = requests.get(f"{INTERACTIVE_URL}/user/balance", headers={"Authorization": token, "authorization": token}, timeout=5)
             if b_resp.status_code == 200:
                 b_data = b_resp.json()
-                res = b_data.get("result", {})
-                funds = float(res.get("availableBalance", res.get("cash", 0.0)))
+                funds = extract_xts_available_margin(b_data)
                 update_account_status(acc_id, "connected", funds=funds)
         except Exception:
             pass

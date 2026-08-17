@@ -228,6 +228,39 @@ def resolve_active_contract_symbol(symbol: str, exchange: str) -> str:
     return resolved
 
 
+def infer_timeframe_from_strategy_tag(tag: Optional[str], explicit_tf: Optional[str] = None) -> str:
+    """
+    Intelligently infer chart timeframe (e.g. 10s, 1m, 15m) from payload or strategy tag.
+    Examples:
+      SILVERMIC_SUPERTREND_10sec -> 10s
+      CRUDE_1M_SCALP -> 1m
+      NIFTY_15MIN_ORB -> 15m
+      BANKNIFTY_1HR_TREND -> 1h
+      DAILY_SWING -> Daily
+    """
+    if explicit_tf and str(explicit_tf).strip() and str(explicit_tf).strip().lower() not in ["none", "null", "undefined"]:
+        return str(explicit_tf).strip()
+    if not tag:
+        return "15m"
+    tag_upper = tag.upper()
+    import re
+    # 1. Seconds: 10SEC, 10S, 5SEC, 15SEC, 30SEC, 45S
+    sec_match = re.search(r'(\d+)\s*(?:SEC|S)\b', tag_upper) or re.search(r'[_](\d+)(?:SEC|S)', tag_upper)
+    if sec_match:
+        return f"{sec_match.group(1)}s"
+    # 2. Minutes: 10MIN, 10M, 1MIN, 1M, 5MIN, 5M, 15MIN, 30M
+    min_match = re.search(r'(\d+)\s*(?:MIN|M)\b', tag_upper) or re.search(r'[_](\d+)(?:MIN|M)', tag_upper)
+    if min_match:
+        return f"{min_match.group(1)}m"
+    # 3. Hours: 1HR, 1H, 2H, 4H
+    hr_match = re.search(r'(\d+)\s*(?:HR|H)\b', tag_upper) or re.search(r'[_](\d+)(?:HR|H)', tag_upper)
+    if hr_match:
+        return f"{hr_match.group(1)}h"
+    if "DAILY" in tag_upper or "1D" in tag_upper:
+        return "Daily"
+    return "15m"
+
+
 def send_telegram_trade_alert(summary_data: Dict[str, Any]):
     """
     Asynchronously send real-time copy trade execution summary to Telegram group/channel.
@@ -705,15 +738,16 @@ def broadcast_copy_order(
     clean_strat_tag = raw_strategy_tag.strip().upper().replace(" ", "_") if raw_strategy_tag else None
     
     if clean_strat_tag and clean_strat_tag not in ["GLOBAL", "ALL"]:
+        inferred_tf = infer_timeframe_from_strategy_tag(clean_strat_tag, order_data.get("timeframe"))
         existing_strat = get_strategy_by_tag(clean_strat_tag)
         if not existing_strat:
             # Auto-register new strategy tag in database!
-            logger.info(f"[Copy Trading] Auto-discovering and creating new strategy '{clean_strat_tag}'...")
+            logger.info(f"[Copy Trading] Auto-discovering and creating new strategy '{clean_strat_tag}' with timeframe {inferred_tf}...")
             create_strategy(
                 strategy_tag=clean_strat_tag,
                 strategy_name=f"Auto-Discovered {clean_strat_tag}",
                 segment=exchange,
-                timeframe=order_data.get("timeframe", "1m"),
+                timeframe=inferred_tf,
                 default_symbol=resolved_symbol,
                 description=f"Automatically registered from TradingView webhook on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             )
@@ -728,8 +762,16 @@ def broadcast_copy_order(
                 "successful": 0,
                 "failed": 0,
                 "latency_ms": 0.0,
-                "text": f"✨ New Strategy [{clean_strat_tag}] auto-discovered and registered! Click 'Manage Subscribers' on Strategy Card to assign clients.",
+                "text": f"✨ New Strategy [{clean_strat_tag}] ({inferred_tf}) auto-discovered and registered! Click 'Manage Subscribers' on Strategy Card to assign clients.",
             })
+        elif existing_strat.get("timeframe") in ["1m", "15m", None] and inferred_tf not in ["1m", "15m"]:
+            # Auto-correct timeframe if tag contains a more accurate timeframe (e.g. 10s)
+            try:
+                from database.copy_trading_db import update_strategy
+                update_strategy(existing_strat["id"], timeframe=inferred_tf)
+                logger.info(f"[Copy Trading] Auto-updated timeframe for '{clean_strat_tag}' to '{inferred_tf}'")
+            except Exception as e_up:
+                logger.debug(f"Failed to auto-update timeframe: {e_up}")
 
     # 5. Direct Client Targeting vs Dynamic Strategy Lookup vs Global Fallback
     if target_client_code or target_account_id:
