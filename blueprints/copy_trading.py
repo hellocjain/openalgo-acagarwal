@@ -156,6 +156,11 @@ def create_account():
         acc_dict["api_secret"] = api_secret
         conn_ok, token, err = get_or_refresh_child_token(acc_dict)
         if conn_ok:
+            try:
+                from services.copy_risk_service import fetch_account_funds_and_pnl
+                fetch_account_funds_and_pnl(acc_dict)
+            except Exception:
+                pass
             res["message"] = "Account added and connected successfully!"
         else:
             res["message"] = f"Account added, but initial login ping failed: {err}"

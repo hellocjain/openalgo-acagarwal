@@ -517,8 +517,9 @@ def execute_order_for_single_account(
                 if pos_resp.status_code == 200:
                     pos_list = pos_resp.json().get("result", {}).get("positionList", []) or []
                     for p in pos_list:
-                        if str(p.get("TradingSymbol", "")).upper() == symbol:
-                            current_net_qty = int(p.get("netQuantity", 0) or 0)
+                        p_sym = str(p.get("TradingSymbol", p.get("symbol", ""))).upper().strip()
+                        if p_sym == symbol or (p_sym and symbol and (p_sym in symbol or symbol in p_sym)):
+                            current_net_qty = int(p.get("netQuantity", p.get("Quantity", 0)) or 0)
                             break
             except Exception:
                 pass
