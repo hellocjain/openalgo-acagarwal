@@ -82,6 +82,9 @@ class OrderManager:
             product = order_data["product"].upper()
             strategy = order_data.get("strategy", "")
 
+            raw_price = order_data.get("price")
+            raw_trigger_price = order_data.get("trigger_price")
+
             # Drop fields that don't apply to this price_type so stale values from
             # the form (e.g. a leftover trigger_price after switching SL-M -> LIMIT)
             # cannot be stored or shown back in the orderbook.
@@ -262,6 +265,20 @@ class OrderManager:
                     except Exception as e:
                         logger.debug(f"Pre-fetched quote unusable: {e}")
 
+                # Attempt 0.5: Use caller-provided or chart-provided price if available
+                if not quote_fetch_success and raw_price:
+                    try:
+                        p_val = Decimal(str(raw_price))
+                        if p_val > 0:
+                            margin_calculation_price = p_val
+                            cached_quote = {"ltp": float(p_val)}
+                            logger.info(
+                                f"Using caller-provided price {margin_calculation_price} for {symbol} MARKET order in Sandbox"
+                            )
+                            quote_fetch_success = True
+                    except Exception as e:
+                        logger.debug(f"Caller-provided price unusable: {e}")
+
                 # Attempt 1: Fetch live quote with retry
                 if not quote_fetch_success:
                     for attempt in range(3):
@@ -297,6 +314,31 @@ class OrderManager:
                             f"Quote fetch failed, using last known price {margin_calculation_price} for {symbol}"
                         )
                         quote_fetch_success = True
+
+                # Attempt 2.5: Try child accounts / broker live session quotes fallback
+                if not quote_fetch_success:
+                    try:
+                        from database.copy_trading_db import get_all_child_accounts
+                        from services.copy_trading_service import get_or_refresh_child_token
+                        accounts = get_all_child_accounts(active_only=True, include_secrets=True)
+                        for acc in accounts:
+                            conn_ok, c_token, _ = get_or_refresh_child_token(acc)
+                            if conn_ok and c_token:
+                                from broker.acagarwal.api.data import Data
+                                bd = Data(c_token)
+                                b_quote = bd.get_quotes(symbol, exchange)
+                                if b_quote and isinstance(b_quote, dict) and b_quote.get("result"):
+                                    res_q = b_quote["result"]
+                                    if isinstance(res_q, list) and len(res_q) > 0:
+                                        res_q = res_q[0]
+                                    ltp_q = res_q.get("Touchline", {}).get("LastTradedPrice") or res_q.get("LastTradedPrice") or res_q.get("ltp")
+                                    if ltp_q and float(ltp_q) > 0:
+                                        margin_calculation_price = Decimal(str(ltp_q))
+                                        cached_quote = {"ltp": float(ltp_q)}
+                                        quote_fetch_success = True
+                                        break
+                    except Exception as b_ex:
+                        logger.debug(f"Child token quote fetch fallback notice: {b_ex}")
 
                 # Attempt 3: Reject order if no valid price available
                 if not quote_fetch_success:

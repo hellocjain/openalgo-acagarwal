@@ -641,7 +641,7 @@ export class TradingTerminal {
         type,
         qty,
         product: this.product as 'CNC' | 'NRML' | 'MIS',
-        price: type === 'MARKET' ? undefined : px,
+        price: px || this.lastLtp || undefined,
         triggerPrice: type === 'SL' || type === 'SL-M' ? px : undefined,
         mode: this.tradeMode(),
       })
@@ -666,6 +666,7 @@ export class TradingTerminal {
         type: 'MARKET',
         qty,
         product: (this.position.product || this.product) as 'CNC' | 'NRML' | 'MIS',
+        price: this.lastLtp || undefined,
         mode: this.tradeMode(),
       })
       this.toast('position closed', 'ok')
