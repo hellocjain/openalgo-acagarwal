@@ -220,6 +220,22 @@ def cancel_client_orders(account_id: int):
     return jsonify(res)
 
 
+@copy_trading_bp.route("/accounts/<int:account_id>/order", methods=["POST"])
+def place_client_order(account_id: int):
+    """Place a direct order or smart order for a specific client account."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not data:
+        return jsonify({"status": "error", "message": "Invalid or missing JSON payload"}), 400
+
+    account = get_child_account(account_id, include_secrets=True)
+    if not account:
+        return jsonify({"status": "error", "message": "Child account not found"}), 404
+
+    from services.copy_trading_service import execute_order_for_single_account
+    result = execute_order_for_single_account(account, data)
+    return jsonify(result)
+
+
 @copy_trading_bp.route("/export/client/<int:account_id>", methods=["GET"])
 def export_client_csv(account_id: int):
     """Download trade logs for a specific client as CSV."""

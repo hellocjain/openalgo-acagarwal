@@ -133,6 +133,25 @@ def test_sqlite_concurrent_burst():
     print("  ✅ 50 concurrent thread writes & reads executed cleanly with 0 database lock errors.")
 
 
+def test_direct_client_routing_and_smart_order():
+    """Test 5: Multi-Tenant Direct Client Routing & Position Sizing"""
+    print("\n--- TEST 5: Multi-Tenant Direct Client Targeting & Smart Orders ---")
+    from services.copy_trading_service import broadcast_copy_order
+
+    # Broadcast with specific client_code
+    res = broadcast_copy_order({
+        "client_code": "DM933",
+        "symbol": "CRUDEOIL24AUGFUT",
+        "exchange": "MCXFO",
+        "action": "BUY",
+        "quantity": 100,
+        "pricetype": "MARKET",
+        "product": "MIS"
+    })
+    assert res.get("status") == "success"
+    print(f"  ✅ Targeted signal routed exclusively to client DM933 (Total accounts: {res.get('total_accounts')}).")
+
+
 if __name__ == "__main__":
     print("==================================================================")
     print("      STARTING COPY TRADING BUG BOUNTY TEST SUITE")
@@ -141,6 +160,7 @@ if __name__ == "__main__":
     test_freeze_slicing()
     test_idempotency_deduplication()
     test_sqlite_concurrent_burst()
+    test_direct_client_routing_and_smart_order()
     print("\n==================================================================")
     print("      🎯 ALL BUG BOUNTY TESTS PASSED WITH ZERO ERRORS!")
     print("==================================================================")

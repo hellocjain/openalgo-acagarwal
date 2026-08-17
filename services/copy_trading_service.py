@@ -325,14 +325,63 @@ def execute_order_for_single_account(
             "latency_ms": latency_ms,
         }
 
-    # 2. Calculate child-specific quantity
+    # 2. Calculate child-specific quantity & Smart Order Position Reconciliation
     symbol = order_data.get("symbol", "")
     raw_exchange = order_data.get("exchange", "")
     exchange = normalize_exchange_segment(raw_exchange, symbol)
     base_qty = int(order_data.get("quantity", 1))
     lot_size = int(order_data.get("lot_size", 1))
-    child_qty = calculate_child_quantity(account, base_qty, lot_size, symbol=symbol, exchange=exchange)
     action = order_data.get("action", "BUY").upper()
+    child_qty = calculate_child_quantity(account, base_qty, lot_size, symbol=symbol, exchange=exchange)
+
+    # If TradingView / Smart Order position_size is provided, reconcile target vs current net position
+    position_size_raw = order_data.get("position_size")
+    if position_size_raw is not None:
+        try:
+            target_pos_base = int(position_size_raw)
+            if target_pos_base == 0:
+                child_target_pos = 0
+            else:
+                child_target_pos = calculate_child_quantity(account, abs(target_pos_base), lot_size, symbol=symbol, exchange=exchange)
+                if target_pos_base < 0:
+                    child_target_pos = -child_target_pos
+
+            # Fetch current net position for this child account
+            current_net_qty = 0
+            try:
+                pos_url = f"{INTERACTIVE_URL}/portfolio/positions?dayOrNet=NetWise"
+                pos_resp = requests.get(pos_url, headers={"Authorization": token, "Content-Type": "application/json"}, timeout=3)
+                if pos_resp.status_code == 200:
+                    pos_list = pos_resp.json().get("result", {}).get("positionList", []) or []
+                    for p in pos_list:
+                        if str(p.get("TradingSymbol", "")).upper() == symbol:
+                            current_net_qty = int(p.get("netQuantity", 0) or 0)
+                            break
+            except Exception:
+                pass
+
+            if current_net_qty == child_target_pos:
+                logger.info(f"[Copy Trading] Account {account_name} ({client_code}) positions already matched (current: {current_net_qty}, target: {child_target_pos}). No action needed.")
+                return {
+                    "account_id": account_id,
+                    "account_name": account_name,
+                    "client_code": client_code,
+                    "status": "success",
+                    "quantity": 0,
+                    "message": f"Positions already matched ({current_net_qty}). No action needed.",
+                    "latency_ms": (time.time() - start_time) * 1000,
+                }
+
+            diff = child_target_pos - current_net_qty
+            if diff > 0:
+                action = "BUY"
+                child_qty = diff
+            else:
+                action = "SELL"
+                child_qty = abs(diff)
+        except Exception as pe:
+            logger.warning(f"[Copy Trading] Smart Order position reconciliation notice for {account_name}: {pe}")
+
     pricetype = order_data.get("pricetype", "MARKET").upper()
     product = order_data.get("product", "MIS").upper()
     price = float(order_data.get("price", 0.0))
@@ -344,7 +393,10 @@ def execute_order_for_single_account(
     placed_orders = []
     from broker.acagarwal.api.order_api import place_order_api
 
-    for chunk_qty in qty_slices:
+    for idx, chunk_qty in enumerate(qty_slices):
+        if idx > 0:
+            time.sleep(0.15)  # Avoid rapid rate limits between slices for the same account
+
         child_order_payload = {
             "symbol": symbol,
             "exchange": exchange,
@@ -435,7 +487,7 @@ def broadcast_copy_order(
 ) -> Dict[str, Any]:
     """
     Broadcast a trade signal to all mapped child accounts in parallel using ThreadPoolExecutor.
-    Supports dynamic strategy routing and duplicate signal protection.
+    Supports dynamic strategy routing, direct client targeting, and duplicate signal protection.
     """
     # 1. Check Global Master Switch
     if not get_master_switch():
@@ -465,10 +517,18 @@ def broadcast_copy_order(
 
     t0 = time.time()
     strategy_tag = order_data.get("strategy")
+    target_client_code = order_data.get("client_code")
+    target_account_id = order_data.get("account_id")
     target_accounts: List[Dict[str, Any]] = []
 
-    # 3. Dynamic Strategy Subscriber Lookup vs Global Fallback
-    if strategy_tag and strategy_tag.strip().upper() not in ["GLOBAL", "ALL"]:
+    # 3. Direct Client Targeting vs Dynamic Strategy Lookup vs Global Fallback
+    if target_client_code or target_account_id:
+        all_accs = get_all_child_accounts(active_only=True, include_secrets=True)
+        if target_client_code:
+            target_accounts = [a for a in all_accs if a["client_code"] == str(target_client_code).upper().strip()]
+        elif target_account_id:
+            target_accounts = [a for a in all_accs if a["id"] == int(target_account_id)]
+    elif strategy_tag and strategy_tag.strip().upper() not in ["GLOBAL", "ALL"]:
         target_accounts = get_active_subscribers_for_strategy_tag(strategy_tag)
         if not target_accounts:
             logger.info(f"[Copy Trading] No active clients subscribed to strategy tag '{strategy_tag}'")
