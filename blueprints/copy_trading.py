@@ -425,7 +425,7 @@ def is_authenticated_webhook(data: dict) -> bool:
 def copy_webhook():
     """
     Replicate external trading signal across all mapped child accounts.
-    Accepts standard OpenAlgo JSON payload + TradingView placeholders + optional 'strategy' tag.
+    Accepts standard OpenAlgo JSON payload + optional 'strategy' tag.
     """
     data = request.get_json(force=True, silent=True)
     if not data:
@@ -435,74 +435,42 @@ def copy_webhook():
     if not is_authenticated_webhook(data):
         return jsonify({"status": "error", "message": "Unauthorized: Invalid or missing API key"}), 401
 
-    # 2. Resolve Strategy Tag & Fallbacks
-    strategy_tag = data.get("strategy") or data.get("strategy_tag") or data.get("tag")
-    if not strategy_tag and data.get("secret") and str(data.get("secret")).upper() != "CHECK":
-        strategy_tag = data.get("secret")
+    # 2. Strict Input Validation
+    symbol = (data.get("symbol") or "").strip().upper()
+    action = (data.get("action") or "").strip().upper()
+    raw_qty = data.get("quantity")
 
-    strategy_obj = None
-    if strategy_tag:
-        strategy_tag = str(strategy_tag).strip().upper().replace(" ", "_")
-        data["strategy"] = strategy_tag
-        session = Session()
-        try:
-            strategy_obj = session.query(CopyStrategy).filter_by(strategy_tag=strategy_tag).first()
-        finally:
-            session.close()
+    if not symbol or not action or raw_qty is None:
+        return jsonify({"status": "error", "message": "symbol, action, and quantity are required"}), 400
 
-    # 3. Intelligent Symbol Resolution
-    raw_symbol = (data.get("symbol") or data.get("ticker") or "").strip().upper()
-    if not raw_symbol or raw_symbol in ["{{TICKER}}", "{{ticker}}", "TICKER"]:
-        if strategy_obj and strategy_obj.default_symbol:
-            raw_symbol = strategy_obj.default_symbol.strip().upper()
-        else:
-            raw_symbol = "CRUDEOIL"
+    if action not in ["BUY", "SELL"]:
+        return jsonify({"status": "error", "message": "action must be BUY or SELL"}), 400
 
-    # 4. Action Normalization
-    raw_action = (data.get("action") or "").strip().upper()
-    if raw_action in ["BUY", "LONG", "BUY_SIGNAL", "ENTRY_LONG"]:
-        action = "BUY"
-    elif raw_action in ["SELL", "SHORT", "SELL_SIGNAL", "ENTRY_SHORT", "EXIT", "FLAT"]:
-        action = "SELL"
-    elif "BUY" in raw_action:
-        action = "BUY"
-    elif "SELL" in raw_action:
-        action = "SELL"
-    else:
-        action = "BUY"
-
-    # 5. Quantity Normalization
-    raw_qty = data.get("quantity") or data.get("contracts")
     try:
-        quantity = int(float(str(raw_qty)))
+        quantity = int(raw_qty)
         if quantity <= 0:
-            quantity = 1
+            return jsonify({"status": "error", "message": "quantity must be greater than zero"}), 400
     except (ValueError, TypeError):
-        quantity = 1
+        return jsonify({"status": "error", "message": "quantity must be a positive integer"}), 400
 
-    # 6. Exchange Segment Resolution
-    raw_exchange = (data.get("exchange") or "").strip().upper()
-    if not raw_exchange:
-        if strategy_obj and strategy_obj.segment:
-            raw_exchange = strategy_obj.segment
-        else:
-            raw_exchange = "MCXFO"
-
-    data["symbol"] = raw_symbol
+    data["symbol"] = symbol
     data["action"] = action
     data["quantity"] = quantity
-    data["exchange"] = raw_exchange
 
     # Sanitize pricetype & product
-    pricetype = (data.get("pricetype") or data.get("price_type") or "MARKET").strip().upper()
+    pricetype = (data.get("pricetype") or "MARKET").strip().upper()
     if pricetype not in ["MARKET", "LIMIT", "SL", "SL-M"]:
         pricetype = "MARKET"
     data["pricetype"] = pricetype
 
-    product = (data.get("product") or data.get("product_type") or "MIS").strip().upper()
+    product = (data.get("product") or "MIS").strip().upper()
     if product not in ["MIS", "NRML", "CNC"]:
         product = "MIS"
     data["product"] = product
+
+    # Sanitize strategy tag if provided
+    if data.get("strategy"):
+        data["strategy"] = str(data["strategy"]).strip().upper().replace(" ", "_")
 
     # Broadcast signal in parallel with dynamic strategy routing
     result = broadcast_copy_order(data)
