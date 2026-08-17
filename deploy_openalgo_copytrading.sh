@@ -279,7 +279,7 @@ adapter = create_broker_adapter('acagarwal')
 print('  [✓] All AC Agarwal broker modules and WebSocket proxy adapter verified!')
 
 try:
-    from database.user_db import add_user, find_user_by_exact_username, init_db as init_user_db
+    from database.user_db import add_user, find_user_by_exact_username, init_db as init_user_db, db_session
     from database.auth_db import init_db as init_auth_db, upsert_auth
     from database.copy_trading_db import init_copy_trading_db
     init_user_db()
@@ -296,7 +296,8 @@ try:
         print(f'  [✓] Client admin user "{admin_user}" initialized in database')
     else:
         user.set_password(admin_pass)
-        print(f'  [✓] Client admin user "{admin_user}" password configured')
+        db_session.commit()
+        print(f'  [✓] Client admin user "{admin_user}" password configured and saved')
 
     if broker_user_id:
         upsert_auth(admin_user, broker_user_id, broker_user_id)
