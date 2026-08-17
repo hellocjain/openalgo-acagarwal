@@ -1424,11 +1424,16 @@ if strategy.position_size != strategy.position_size[1]
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label className="text-xs font-semibold">Webhook Destination URL</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">TradingView Webhook Destination URL (Port 80 HTTP)</Label>
+                  <Badge variant="outline" className="text-[10px] font-mono text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40">
+                    TradingView Port 80 Compatible
+                  </Badge>
+                </div>
                 <div className="flex gap-2">
                   <Input
                     readOnly
-                    value={`${window.location.origin}/api/copy-trading/webhook`}
+                    value={`${window.location.protocol}//${window.location.hostname}/api/copy-trading/webhook`}
                     className="font-mono text-xs bg-muted font-bold text-blue-600 dark:text-blue-400"
                   />
                   <Button
@@ -1436,13 +1441,16 @@ if strategy.position_size != strategy.position_size[1]
                     size="sm"
                     className="gap-1.5"
                     onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}/api/copy-trading/webhook`)
-                      showStatus('success', 'Webhook URL copied to clipboard!')
+                      navigator.clipboard.writeText(`${window.location.protocol}//${window.location.hostname}/api/copy-trading/webhook`)
+                      showStatus('success', 'TradingView Webhook URL copied to clipboard!')
                     }}
                   >
                     <Copy className="h-4 w-4" /> Copy URL
                   </Button>
                 </div>
+                <p className="text-[11px] text-muted-foreground">
+                  TradingView requires standard Port 80 (HTTP) without custom port numbers (e.g. <code>http://168.144.22.51/api/copy-trading/webhook</code>).
+                </p>
               </div>
 
               {/* Quick Strategy Generator Selector */}
@@ -2456,8 +2464,8 @@ if strategy.position_size != strategy.position_size[1]
                 variant="secondary"
                 className="gap-1.5 font-semibold text-xs"
                 onClick={() => {
-                  navigator.clipboard.writeText(`${window.location.origin}/api/copy-trading/webhook`)
-                  showStatus('success', 'Webhook URL copied!')
+                  navigator.clipboard.writeText(`${window.location.protocol}//${window.location.hostname}/api/copy-trading/webhook`)
+                  showStatus('success', 'TradingView Webhook URL copied!')
                 }}
               >
                 <Copy className="h-3.5 w-3.5" /> Copy Webhook URL
