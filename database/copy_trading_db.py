@@ -989,6 +989,121 @@ def get_active_subscribers_for_strategy_tag(strategy_tag: str) -> List[Dict[str,
         session.close()
 
 
+def bulk_assign_subscribers_to_strategy(
+    strategy_id: int,
+    subscribers: List[Dict[str, Any]],
+    replace_all: bool = False,
+) -> Dict[str, Any]:
+    """
+    Bulk assign or update clients subscribed to a strategy.
+    subscribers: [
+        {"account_id": 1, "multiplier": 1.0, "fixed_qty": 0, "max_daily_loss": 5000.0, "is_active": True},
+        ...
+    ]
+    """
+    session = Session()
+    try:
+        strat = session.query(CopyStrategy).filter_by(id=strategy_id).first()
+        if not strat:
+            return {"status": "error", "message": "Strategy not found"}
+
+        account_ids_in_payload = set()
+        updated_count = 0
+        created_count = 0
+
+        for sub in subscribers:
+            acc_id = sub.get("account_id")
+            if not acc_id:
+                continue
+            account_ids_in_payload.add(acc_id)
+
+            multiplier = max(0.1, min(10.0, float(sub.get("multiplier", 1.0))))
+            fixed_qty = int(sub.get("fixed_qty", 0))
+            max_daily_loss = float(sub.get("max_daily_loss", 5000.0))
+            is_active = bool(sub.get("is_active", True))
+
+            existing = session.query(ClientStrategyMapping).filter_by(
+                account_id=acc_id, strategy_id=strategy_id
+            ).first()
+
+            if existing:
+                existing.multiplier = multiplier
+                existing.fixed_qty = fixed_qty
+                existing.max_daily_loss = max_daily_loss
+                existing.is_active = is_active
+                existing.updated_at = datetime.utcnow()
+                updated_count += 1
+            else:
+                mapping = ClientStrategyMapping(
+                    account_id=acc_id,
+                    strategy_id=strategy_id,
+                    multiplier=multiplier,
+                    fixed_qty=fixed_qty,
+                    max_daily_loss=max_daily_loss,
+                    is_active=is_active,
+                )
+                session.add(mapping)
+                created_count += 1
+
+        if replace_all:
+            # Delete mappings for accounts that were not included in this payload
+            unmapped = session.query(ClientStrategyMapping).filter(
+                ClientStrategyMapping.strategy_id == strategy_id,
+                ~ClientStrategyMapping.account_id.in_(account_ids_in_payload)
+            ).all()
+            for m in unmapped:
+                session.delete(m)
+
+        session.commit()
+        return {
+            "status": "success",
+            "message": f"Updated {updated_count} and added {created_count} subscribers successfully",
+            "total_assigned": len(account_ids_in_payload),
+        }
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error bulk assigning subscribers to strategy {strategy_id}: {e}")
+        return {"status": "error", "message": str(e)}
+    finally:
+        session.close()
+
+
+def get_strategy_subscribers_matrix(strategy_id: int) -> List[Dict[str, Any]]:
+    """
+    Get all accounts in the system with their subscription details to the given strategy.
+    Enables instant UI rendering for 1-click bulk assignment.
+    """
+    session = Session()
+    try:
+        accounts = session.query(CopyAccount).order_by(CopyAccount.id.asc()).all()
+        mappings = {
+            m.account_id: m for m in session.query(ClientStrategyMapping).filter_by(strategy_id=strategy_id).all()
+        }
+
+        result = []
+        for acc in accounts:
+            m = mappings.get(acc.id)
+            result.append({
+                "account_id": acc.id,
+                "account_name": acc.account_name,
+                "client_code": acc.client_code,
+                "is_account_active": acc.is_active,
+                "connection_status": acc.connection_status,
+                "last_funds": acc.last_funds,
+                "is_subscribed": m is not None and m.is_active,
+                "mapping_id": m.id if m else None,
+                "multiplier": m.multiplier if m else acc.multiplier or 1.0,
+                "fixed_qty": m.fixed_qty if m else 0,
+                "max_daily_loss": m.max_daily_loss if m else acc.max_daily_loss or 5000.0,
+            })
+        return result
+    except Exception as e:
+        logger.error(f"Error retrieving subscriber matrix for strategy {strategy_id}: {e}")
+        return []
+    finally:
+        session.close()
+
+
 # =====================================================================
 # Pre-Market Readiness & Telemetry
 # =====================================================================

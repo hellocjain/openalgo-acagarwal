@@ -14,6 +14,7 @@ import {
   Power,
   RefreshCw,
   Search,
+  Send,
   Shield,
   Sliders,
   Sparkles,
@@ -30,6 +31,7 @@ import {
 import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Card,
   CardContent,
@@ -413,6 +415,146 @@ if strategy.position_size != strategy.position_size[1]
       showStatus('error', `Test error: ${e.message}`)
     } finally {
       setTestPingRunning(false)
+    }
+  }
+
+  // Bulk Subscriber Manager Modal State
+  const [isSubscribersModalOpen, setIsSubscribersModalOpen] = useState<boolean>(false)
+  const [selectedStrategyForSubscribers, setSelectedStrategyForSubscribers] = useState<Strategy | null>(null)
+  const [subscriberMatrix, setSubscriberMatrix] = useState<Array<{
+    account_id: number
+    account_name: string
+    client_code: string
+    is_account_active: boolean
+    connection_status: string
+    last_funds: number
+    is_subscribed: boolean
+    multiplier: number
+    fixed_qty: number
+    max_daily_loss: number
+  }>>([])
+  const [loadingSubscribers, setLoadingSubscribers] = useState<boolean>(false)
+  const [savingSubscribers, setSavingSubscribers] = useState<boolean>(false)
+  const [subscriberSearchTerm, setSubscriberSearchTerm] = useState<string>('')
+  const [bulkMultiplierInput, setBulkMultiplierInput] = useState<number>(1.0)
+
+  // Telegram Alert Settings State
+  const [telegramBotToken, setTelegramBotToken] = useState<string>(() => localStorage.getItem('oa_tg_token') || '')
+  const [telegramChatId, setTelegramChatId] = useState<string>(() => localStorage.getItem('oa_tg_chat_id') || '')
+  const [telegramTesting, setTelegramTesting] = useState<boolean>(false)
+
+  const openSubscribersModal = async (strat: Strategy) => {
+    setSelectedStrategyForSubscribers(strat)
+    setIsSubscribersModalOpen(true)
+    setLoadingSubscribers(true)
+    try {
+      const res = await fetch(`/api/copy-trading/strategies/${strat.id}/subscribers`)
+      const data = await res.json()
+      if (data.status === 'success') {
+        setSubscriberMatrix(data.subscribers || [])
+      } else {
+        showStatus('error', data.message || 'Failed to fetch strategy subscribers')
+      }
+    } catch (e: any) {
+      showStatus('error', `Error loading subscribers: ${e.message}`)
+    } finally {
+      setLoadingSubscribers(false)
+    }
+  }
+
+  const toggleSubscriberSelection = (accountId: number) => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => item.account_id === accountId ? { ...item, is_subscribed: !item.is_subscribed } : item)
+    )
+  }
+
+  const updateSubscriberMultiplier = (accountId: number, mult: number) => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => item.account_id === accountId ? { ...item, multiplier: mult } : item)
+    )
+  }
+
+  const updateSubscriberMaxLoss = (accountId: number, loss: number) => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => item.account_id === accountId ? { ...item, max_daily_loss: loss } : item)
+    )
+  }
+
+  const handleSelectAllActiveSubscribers = () => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => ({ ...item, is_subscribed: item.is_account_active }))
+    )
+    showStatus('success', 'Selected all active client accounts')
+  }
+
+  const handleDeselectAllSubscribers = () => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => ({ ...item, is_subscribed: false }))
+    )
+  }
+
+  const handleApplyGlobalMultiplierToAll = () => {
+    setSubscriberMatrix(prev =>
+      prev.map(item => item.is_subscribed ? { ...item, multiplier: bulkMultiplierInput } : item)
+    )
+    showStatus('success', `Applied ${bulkMultiplierInput}x multiplier to all selected subscribers`)
+  }
+
+  const handleSaveBulkSubscribers = async () => {
+    if (!selectedStrategyForSubscribers) return
+    setSavingSubscribers(true)
+    try {
+      const payload = {
+        subscribers: subscriberMatrix.filter(s => s.is_subscribed).map(s => ({
+          account_id: s.account_id,
+          multiplier: s.multiplier,
+          fixed_qty: s.fixed_qty || 0,
+          max_daily_loss: s.max_daily_loss || 5000.0,
+          is_active: true,
+        })),
+        replace_all: true,
+      }
+
+      const res = await fetch(`/api/copy-trading/strategies/${selectedStrategyForSubscribers.id}/bulk-subscribers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', data.message || 'Subscribers updated successfully!')
+        setIsSubscribersModalOpen(false)
+        fetchSummaryAndAccounts()
+      } else {
+        showStatus('error', data.message || 'Failed to save subscribers')
+      }
+    } catch (e: any) {
+      showStatus('error', `Error saving subscribers: ${e.message}`)
+    } finally {
+      setSavingSubscribers(false)
+    }
+  }
+
+  const handleTestTelegram = async () => {
+    setTelegramTesting(true)
+    try {
+      localStorage.setItem('oa_tg_token', telegramBotToken)
+      localStorage.setItem('oa_tg_chat_id', telegramChatId)
+      const res = await fetch('/api/copy-trading/telegram-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bot_token: telegramBotToken, chat_id: telegramChatId }),
+      })
+      const data = await res.json()
+      if (data.status === 'success') {
+        showStatus('success', 'Telegram test message delivered successfully!')
+      } else {
+        showStatus('error', data.message || 'Failed to send Telegram test message')
+      }
+    } catch (e: any) {
+      showStatus('error', `Telegram test error: ${e.message}`)
+    } finally {
+      setTelegramTesting(false)
     }
   }
 
@@ -1115,15 +1257,24 @@ if strategy.position_size != strategy.position_size[1]
                     </span>
                   </div>
                 </CardContent>
-                <CardFooter className="pt-2 border-t flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground font-mono">tag: "{strat.strategy_tag}"</span>
+                <CardFooter className="pt-2.5 border-t flex items-center justify-between gap-2 text-xs bg-muted/10">
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 text-xs gap-1.5 font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                    className="h-8 text-xs gap-1.5 font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                    onClick={() => openSubscribersModal(strat)}
+                  >
+                    <Users className="h-3.5 w-3.5" />
+                    Manage Subscribers ({strat.subscribers_count})
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5 font-semibold"
                     onClick={() => openJsonGenerator(strat)}
                   >
-                    <Code2 className="h-3.5 w-3.5" /> View / Copy JSON
+                    <Code2 className="h-3.5 w-3.5 text-blue-500" />
+                    View / Copy JSON
                   </Button>
                 </CardFooter>
               </Card>
@@ -1340,6 +1491,60 @@ if strategy.position_size != strategy.position_size[1]
                   >
                     {copiedPayload ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                     {copiedPayload ? 'Copied!' : 'Copy JSON'}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Telegram Real-Time Alerts Configuration Card */}
+              <div className="border rounded-lg p-4 bg-muted/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Send className="h-4 w-4 text-sky-500" />
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                        Telegram Real-Time Trade Alerts Bot
+                      </h4>
+                      <p className="text-[11px] text-muted-foreground">
+                        Receive instant notifications on Telegram when strategy orders execute across accounts.
+                      </p>
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] text-sky-600 bg-sky-50 dark:bg-sky-950/30">
+                    Real-Time Dispatch
+                  </Badge>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Telegram Bot Token</Label>
+                    <Input
+                      placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRstuVWXyz"
+                      value={telegramBotToken}
+                      onChange={(e) => setTelegramBotToken(e.target.value)}
+                      className="font-mono text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold">Telegram Chat ID / Channel ID</Label>
+                    <Input
+                      placeholder="e.g. -1001234567890 or 987654321"
+                      value={telegramChatId}
+                      onChange={(e) => setTelegramChatId(e.target.value)}
+                      className="font-mono text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs gap-1.5 font-semibold text-sky-600 hover:text-sky-700 hover:bg-sky-50 dark:hover:bg-sky-950/40"
+                    disabled={telegramTesting || !telegramBotToken || !telegramChatId}
+                    onClick={handleTestTelegram}
+                  >
+                    <Zap className="h-3.5 w-3.5 text-amber-500" />
+                    {telegramTesting ? 'Testing...' : '⚡ Send Test Telegram Alert'}
                   </Button>
                 </div>
               </div>
@@ -2267,6 +2472,186 @@ if strategy.position_size != strategy.position_size[1]
                 <Check className="h-4 w-4" /> Copy Alert Payload
               </Button>
             </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk Subscriber Management Modal (Strategy -> Clients Dual Assignment) */}
+      <Dialog open={isSubscribersModalOpen} onOpenChange={setIsSubscribersModalOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="border-b pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <DialogTitle className="text-lg font-bold flex items-center gap-2">
+                  <Users className="h-5 w-5 text-blue-500" />
+                  Manage Subscribers for [{selectedStrategyForSubscribers?.strategy_tag}]
+                </DialogTitle>
+                <DialogDescription className="text-xs mt-1">
+                  Strategy: <strong>{selectedStrategyForSubscribers?.strategy_name}</strong> • Segment: <strong>{selectedStrategyForSubscribers?.segment}</strong> • Default Symbol: <strong>{selectedStrategyForSubscribers?.default_symbol}</strong>
+                </DialogDescription>
+              </div>
+              <Badge variant="outline" className="font-mono text-xs text-blue-600 bg-blue-50 dark:bg-blue-950/40">
+                {subscriberMatrix.filter(s => s.is_subscribed).length} / {subscriberMatrix.length} Clients Subscribed
+              </Badge>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs">
+            {/* Quick Filter & Bulk Action Toolbar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 p-3 rounded-lg border bg-muted/20">
+              <div className="flex items-center gap-2 flex-1">
+                <Search className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Filter by client name or code (e.g. DM933)..."
+                  value={subscriberSearchTerm}
+                  onChange={(e) => setSubscriberSearchTerm(e.target.value)}
+                  className="h-8 text-xs font-medium"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs font-semibold"
+                  onClick={handleSelectAllActiveSubscribers}
+                >
+                  Select All Active
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs"
+                  onClick={handleDeselectAllSubscribers}
+                >
+                  Deselect All
+                </Button>
+                <div className="flex items-center gap-1.5 border-l pl-2">
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="10.0"
+                    value={bulkMultiplierInput}
+                    onChange={(e) => setBulkMultiplierInput(parseFloat(e.target.value) || 1.0)}
+                    className="h-8 w-16 text-xs font-mono text-center font-bold"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-8 text-xs font-semibold"
+                    onClick={handleApplyGlobalMultiplierToAll}
+                  >
+                    Set Mult
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* Subscribers Matrix Table */}
+            {loadingSubscribers ? (
+              <div className="h-48 flex items-center justify-center text-muted-foreground text-xs">
+                Loading client subscriber matrix...
+              </div>
+            ) : (
+              <div className="border rounded-lg overflow-hidden max-h-[50vh] overflow-y-auto">
+                <Table className="text-xs">
+                  <TableHeader className="bg-muted/50 sticky top-0 z-10">
+                    <TableRow>
+                      <TableHead className="w-12 text-center">Subscribe</TableHead>
+                      <TableHead>Client Account</TableHead>
+                      <TableHead>Connection & Margin</TableHead>
+                      <TableHead className="w-32">Multiplier</TableHead>
+                      <TableHead className="w-36">Max Daily Loss (₹)</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {subscriberMatrix
+                      .filter(s =>
+                        s.client_code.toLowerCase().includes(subscriberSearchTerm.toLowerCase()) ||
+                        s.account_name.toLowerCase().includes(subscriberSearchTerm.toLowerCase())
+                      )
+                      .map((sub) => (
+                        <TableRow
+                          key={sub.account_id}
+                          className={`hover:bg-muted/40 cursor-pointer ${sub.is_subscribed ? 'bg-blue-50/30 dark:bg-blue-950/20 font-medium' : 'opacity-70'}`}
+                          onClick={() => toggleSubscriberSelection(sub.account_id)}
+                        >
+                          <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={sub.is_subscribed}
+                              onCheckedChange={() => toggleSubscriberSelection(sub.account_id)}
+                            />
+                          </TableCell>
+
+                          <TableCell>
+                            <div className="font-semibold text-foreground flex items-center gap-2">
+                              {sub.account_name}
+                              <Badge variant="outline" className="font-mono text-[10px]">
+                                {sub.client_code}
+                              </Badge>
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              Status: {sub.is_account_active ? 'Active' : 'Disabled'}
+                            </div>
+                          </TableCell>
+
+                          <TableCell>
+                            <div className="font-medium">{formatCurrency(sub.last_funds || 0)}</div>
+                            <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                              <span className={`h-1.5 w-1.5 rounded-full ${sub.connection_status === 'connected' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                              {sub.connection_status}
+                            </div>
+                          </TableCell>
+
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                step="0.1"
+                                min="0.1"
+                                max="10.0"
+                                disabled={!sub.is_subscribed}
+                                value={sub.multiplier}
+                                onChange={(e) => updateSubscriberMultiplier(sub.account_id, parseFloat(e.target.value) || 1.0)}
+                                className="h-7 text-xs font-mono font-bold"
+                              />
+                              <span className="text-[11px] text-muted-foreground font-mono">x</span>
+                            </div>
+                          </TableCell>
+
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Input
+                              type="number"
+                              step="500"
+                              min="0"
+                              disabled={!sub.is_subscribed}
+                              value={sub.max_daily_loss}
+                              onChange={(e) => updateSubscriberMaxLoss(sub.account_id, parseFloat(e.target.value) || 5000.0)}
+                              className="h-7 text-xs font-mono"
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="border-t pt-3 flex items-center justify-between sm:justify-between">
+            <Button variant="outline" size="sm" onClick={() => setIsSubscribersModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1.5 bg-blue-600 hover:bg-blue-700 font-semibold"
+              disabled={savingSubscribers}
+              onClick={handleSaveBulkSubscribers}
+            >
+              <Check className="h-4 w-4" />
+              {savingSubscribers ? 'Saving Subscribers...' : `Save Subscribers (${subscriberMatrix.filter(s => s.is_subscribed).length} Clients)`}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

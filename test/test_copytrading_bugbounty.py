@@ -134,7 +134,7 @@ def test_sqlite_concurrent_burst():
 
 
 def test_direct_client_routing_and_smart_order():
-    """Test 5: Multi-Tenant Direct Client Routing & Position Sizing"""
+    """Test 5: Multi-Tenant Direct Client Targeting & Smart Orders"""
     print("\n--- TEST 5: Multi-Tenant Direct Client Targeting & Smart Orders ---")
     from services.copy_trading_service import broadcast_copy_order
 
@@ -152,6 +152,75 @@ def test_direct_client_routing_and_smart_order():
     print(f"  ✅ Targeted signal routed exclusively to client DM933 (Total accounts: {res.get('total_accounts')}).")
 
 
+def test_smart_symbol_resolution():
+    """Test 6: Smart Front-Month Expiry Resolution for Commodities and Indices"""
+    print("\n--- TEST 6: Smart Front-Month Contract Symbol Resolution ---")
+    from services.copy_trading_service import resolve_active_contract_symbol
+
+    # Base continuous symbol -> resolved to front-month future
+    s1 = resolve_active_contract_symbol("SILVERMIC", "MCXFO")
+    assert s1.startswith("SILVERMIC") and s1.endswith("FUT"), f"Unexpected: {s1}"
+    print(f"  ✅ Base 'SILVERMIC' resolved to: {s1}")
+
+    s2 = resolve_active_contract_symbol("CRUDEOIL", "MCXFO")
+    assert s2.startswith("CRUDEOIL") and s2.endswith("FUT"), f"Unexpected: {s2}"
+    print(f"  ✅ Base 'CRUDEOIL' resolved to: {s2}")
+
+    s3 = resolve_active_contract_symbol("NIFTY", "NSEFO")
+    assert s3.startswith("NIFTY") and s3.endswith("FUT"), f"Unexpected: {s3}"
+    print(f"  ✅ Base 'NIFTY' resolved to: {s3}")
+
+    # Already exact contract -> unchanged
+    s4 = resolve_active_contract_symbol("SILVERMIC24AUGFUT", "MCXFO")
+    assert s4 == "SILVERMIC24AUGFUT"
+    print(f"  ✅ Exact 'SILVERMIC24AUGFUT' preserved unchanged: {s4}")
+
+
+def test_strategy_auto_discovery_and_bulk_subscribers():
+    """Test 7: Automatic Strategy Discovery & Dual-Direction Bulk Subscriber Mapping"""
+    print("\n--- TEST 7: Strategy Auto-Discovery & Bulk Subscriber Matrix ---")
+    from database.copy_trading_db import (
+        bulk_assign_subscribers_to_strategy,
+        get_all_strategies,
+        get_strategy_by_tag,
+        get_strategy_subscribers_matrix,
+    )
+    from services.copy_trading_service import broadcast_copy_order
+
+    # 1. Fire a webhook with a completely new un-registered strategy tag
+    auto_tag = f"BOUNTY_AUTODISCOVER_{int(time.time())}"
+    res = broadcast_copy_order({
+        "strategy": auto_tag,
+        "symbol": "NATURALGAS",
+        "exchange": "MCXFO",
+        "action": "BUY",
+        "quantity": 1250,
+        "pricetype": "MARKET",
+        "product": "MIS"
+    })
+    assert res.get("status") == "success"
+
+    # Verify that the strategy was automatically created in the database
+    strat = get_strategy_by_tag(auto_tag)
+    assert strat is not None, f"Strategy {auto_tag} should have been auto-discovered and created!"
+    assert strat["strategy_tag"] == auto_tag
+    print(f"  ✅ Webhook auto-discovered and registered strategy: [{strat['strategy_tag']}] (ID: {strat['id']})")
+
+    # 2. Test Bulk Subscriber Matrix
+    matrix = get_strategy_subscribers_matrix(strat["id"])
+    assert isinstance(matrix, list)
+    print(f"  ✅ Retrieved subscriber matrix with {len(matrix)} accounts for UI rendering.")
+
+    # 3. Test Bulk Subscriber Assignment
+    if matrix:
+        target_subscribers = [
+            {"account_id": matrix[0]["account_id"], "multiplier": 2.5, "max_daily_loss": 8000.0, "is_active": True}
+        ]
+        bulk_res = bulk_assign_subscribers_to_strategy(strat["id"], target_subscribers, replace_all=True)
+        assert bulk_res.get("status") == "success"
+        print(f"  ✅ Bulk assigned {bulk_res.get('total_assigned')} subscribers with custom 2.5x multiplier.")
+
+
 if __name__ == "__main__":
     print("==================================================================")
     print("      STARTING COPY TRADING BUG BOUNTY TEST SUITE")
@@ -161,6 +230,8 @@ if __name__ == "__main__":
     test_idempotency_deduplication()
     test_sqlite_concurrent_burst()
     test_direct_client_routing_and_smart_order()
+    test_smart_symbol_resolution()
+    test_strategy_auto_discovery_and_bulk_subscribers()
     print("\n==================================================================")
     print("      🎯 ALL BUG BOUNTY TESTS PASSED WITH ZERO ERRORS!")
     print("==================================================================")

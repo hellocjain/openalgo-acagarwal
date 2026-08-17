@@ -6,6 +6,7 @@ and TradingView strategy orders across all 100+ active child accounts concurrent
 
 import concurrent.futures
 import hashlib
+import os
 import threading
 import time
 from collections import deque
@@ -18,10 +19,12 @@ from broker.acagarwal.baseurl import INTERACTIVE_URL
 from database.copy_trading_db import (
     CopyAccount,
     Session,
+    create_strategy,
     get_active_subscribers_for_strategy_tag,
     get_all_child_accounts,
     get_child_account,
     get_master_switch,
+    get_strategy_by_tag,
     record_copy_order,
     update_account_status,
 )
@@ -143,7 +146,7 @@ def normalize_exchange_segment(exchange: str, symbol: str) -> str:
     ex = (exchange or "").upper().strip()
     sym = (symbol or "").upper().strip()
 
-    if "MCX" in ex or sym.startswith("CRUDE") or sym.startswith("GOLD") or sym.startswith("SILVER") or sym.startswith("NATURAL"):
+    if "MCX" in ex or sym.startswith("CRUDE") or sym.startswith("GOLD") or sym.startswith("SILVER") or sym.startswith("NATURAL") or sym.startswith("COPPER") or sym.startswith("ZINC"):
         return "MCXFO"
     if ex in ["NFO", "NSEFO", "NSE_FO"]:
         return "NSEFO"
@@ -151,7 +154,139 @@ def normalize_exchange_segment(exchange: str, symbol: str) -> str:
         return "NSECM"
     if ex in ["BSE", "BSECM", "BSE_CM"]:
         return "BSECM"
-    return ex or "NSEFO"
+    if ex in ["BSEFO", "BSE_FO"]:
+        return "BSEFO"
+    return ex or "MCXFO" if any(sym.startswith(k) for k in ["CRUDE", "GOLD", "SILVER", "NATURAL", "COPPER", "ZINC"]) else (ex or "NSEFO")
+
+
+def resolve_active_contract_symbol(symbol: str, exchange: str) -> str:
+    """
+    Intelligently resolves continuous or base ticker symbols from TradingView to 
+    the active front-month tradable contract on MCX, NSE, or BSE.
+    
+    Examples:
+      'SILVERMIC'  on MCXFO -> 'SILVERMIC24AUGFUT' (or active front month)
+      'CRUDEOIL'   on MCXFO -> 'CRUDEOIL24AUGFUT'
+      'NATURALGAS' on MCXFO -> 'NATURALGAS24AUGFUT'
+      'NIFTY'      on NSEFO -> 'NIFTY24AUGFUT'
+      'SILVERMIC24AUGFUT' -> remains 'SILVERMIC24AUGFUT'
+    """
+    if not symbol:
+        return ""
+    clean_sym = symbol.strip().upper()
+    ex = normalize_exchange_segment(exchange, clean_sym)
+
+    # 1. If it already has month code (e.g. 24AUG / 26AUG / FUT / CE / PE / numbers at the end), keep exact
+    month_names = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    has_month = any(m in clean_sym for m in month_names)
+    if clean_sym.endswith("FUT") or clean_sym.endswith("CE") or clean_sym.endswith("PE") or (has_month and any(c.isdigit() for c in clean_sym)):
+        return clean_sym
+
+    # 2. Try querying master SymToken DB table if available
+    try:
+        from database.symbol import SymToken, db_session
+        from sqlalchemy import or_
+
+        now_str = datetime.utcnow().strftime("%Y-%m-%d")
+        search_ex = "MCX" if "MCX" in ex else ("NSE" if "NSE" in ex else "BSE")
+        matches = (
+            db_session.query(SymToken)
+            .filter(
+                or_(SymToken.name == clean_sym, SymToken.symbol.like(f"{clean_sym}%")),
+                SymToken.exchange.ilike(f"%{search_ex}%"),
+            )
+            .order_by(SymToken.expiry.asc())
+            .all()
+        )
+        for m in matches:
+            if m.expiry and m.expiry >= now_str and m.symbol:
+                sym_up = m.symbol.upper()
+                itype = str(m.instrumenttype or "").upper()
+                if sym_up.endswith("CE") or sym_up.endswith("PE") or "OPT" in itype:
+                    continue
+                if sym_up.endswith("FUT") or itype in ["FUTCOM", "FUTIDX", "FUTSTK", "FUT"] or not (sym_up.endswith("CE") or sym_up.endswith("PE")):
+                    logger.info(f"[Symbol Resolver] Resolved base '{clean_sym}' -> Active Contract '{m.symbol}' from SymToken DB")
+                    return m.symbol
+        for m in matches:
+            if m.symbol:
+                sym_up = m.symbol.upper()
+                itype = str(m.instrumenttype or "").upper()
+                if not (sym_up.endswith("CE") or sym_up.endswith("PE") or "OPT" in itype):
+                    if sym_up.endswith("FUT") or itype in ["FUTCOM", "FUTIDX", "FUTSTK", "FUT"]:
+                        return m.symbol
+    except Exception as ex_db:
+        logger.debug(f"[Symbol Resolver] SymToken lookup skipped: {ex_db}")
+
+    # 3. Dynamic Date Construction Fallback:
+    now = datetime.now()
+    yy = str(now.year)[2:]
+    curr_month_idx = now.month - 1
+    # If today >= 25th of month (past standard monthly expiry date), roll to next month
+    if now.day >= 25:
+        curr_month_idx = (curr_month_idx + 1) % 12
+        if curr_month_idx == 0:
+            yy = str(now.year + 1)[2:]
+    mmm = month_names[curr_month_idx]
+
+    resolved = f"{clean_sym}{yy}{mmm}FUT"
+    logger.info(f"[Symbol Resolver] Dynamically resolved '{clean_sym}' -> '{resolved}'")
+    return resolved
+
+
+def send_telegram_trade_alert(summary_data: Dict[str, Any]):
+    """
+    Asynchronously send real-time copy trade execution summary to Telegram group/channel.
+    """
+    def _send():
+        try:
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            chat_id = os.getenv("TELEGRAM_CHAT_ID")
+            if not bot_token or not chat_id:
+                return
+
+            action = summary_data.get("action", "BUY").upper()
+            symbol = summary_data.get("symbol", "")
+            exchange = summary_data.get("exchange", "")
+            strategy = summary_data.get("strategy", "Manual / Webhook")
+            qty = summary_data.get("quantity", 1)
+            product = summary_data.get("product", "MIS")
+            pricetype = summary_data.get("pricetype", "MARKET")
+            total = summary_data.get("total_accounts", 0)
+            success = summary_data.get("successful_orders", 0)
+            failed = summary_data.get("failed_orders", 0)
+            lat = summary_data.get("total_latency_ms", 0.0)
+
+            status_emoji = "🟢" if failed == 0 else ("🟡" if success > 0 else "🔴")
+            action_emoji = "📈" if action == "BUY" else ("📉" if action == "SELL" else "🔄")
+
+            msg = (
+                f"{action_emoji} <b>OpenAlgo Copy-Trade Executed</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>Strategy:</b> <code>{strategy}</code>\n"
+                f"🎯 <b>Symbol:</b> <code>{symbol}</code> ({exchange})\n"
+                f"⚡ <b>Action:</b> <b>{action}</b> {qty} units ({pricetype} | {product})\n"
+                f"👥 <b>Subscribers:</b> <b>{success}/{total}</b> Filled"
+            )
+            if failed > 0:
+                msg += f" (⚠️ {failed} Failed)"
+            msg += (
+                f"\n⏱️ <b>Avg Latency:</b> <code>{lat:.1f}ms</code>\n"
+                f"{status_emoji} <b>Health:</b> {'100% Filled' if failed == 0 else 'Completed with Notices'}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            )
+
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": msg,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            requests.post(url, json=payload, timeout=5)
+        except Exception as e:
+            logger.debug(f"[Telegram Alert] Failed to dispatch alert: {e}")
+
+    threading.Thread(target=_send, daemon=True).start()
 
 
 def get_commodity_freeze_qty(symbol: str) -> Optional[int]:
@@ -516,25 +651,76 @@ def broadcast_copy_order(
         }
 
     t0 = time.time()
-    strategy_tag = order_data.get("strategy")
+    raw_strategy_tag = order_data.get("strategy")
     target_client_code = order_data.get("client_code")
     target_account_id = order_data.get("account_id")
     target_accounts: List[Dict[str, Any]] = []
 
-    # 3. Direct Client Targeting vs Dynamic Strategy Lookup vs Global Fallback
+    # 3. Resolve active contract symbol if base continuous symbol was provided
+    raw_symbol = order_data.get("symbol", "")
+    raw_exchange = order_data.get("exchange", "")
+    exchange = normalize_exchange_segment(raw_exchange, raw_symbol)
+    resolved_symbol = resolve_active_contract_symbol(raw_symbol, exchange)
+    order_data["symbol"] = resolved_symbol
+    order_data["exchange"] = exchange
+
+    # 4. Strategy Auto-Discovery & Dynamic Lookup
+    clean_strat_tag = raw_strategy_tag.strip().upper().replace(" ", "_") if raw_strategy_tag else None
+    
+    if clean_strat_tag and clean_strat_tag not in ["GLOBAL", "ALL"]:
+        existing_strat = get_strategy_by_tag(clean_strat_tag)
+        if not existing_strat:
+            # Auto-register new strategy tag in database!
+            logger.info(f"[Copy Trading] Auto-discovering and creating new strategy '{clean_strat_tag}'...")
+            create_strategy(
+                strategy_tag=clean_strat_tag,
+                strategy_name=f"Auto-Discovered {clean_strat_tag}",
+                segment=exchange,
+                timeframe=order_data.get("timeframe", "1m"),
+                default_symbol=resolved_symbol,
+                description=f"Automatically registered from TradingView webhook on {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            )
+            now_time = datetime.now().strftime("%H:%M:%S")
+            _PLAIN_ENGLISH_FEED.appendleft({
+                "timestamp": now_time,
+                "type": "info",
+                "action": "AUTO-DISCOVER",
+                "symbol": resolved_symbol,
+                "strategy": clean_strat_tag,
+                "total_clients": 0,
+                "successful": 0,
+                "failed": 0,
+                "latency_ms": 0.0,
+                "text": f"✨ New Strategy [{clean_strat_tag}] auto-discovered and registered! Click 'Manage Subscribers' on Strategy Card to assign clients.",
+            })
+
+    # 5. Direct Client Targeting vs Dynamic Strategy Lookup vs Global Fallback
     if target_client_code or target_account_id:
         all_accs = get_all_child_accounts(active_only=True, include_secrets=True)
         if target_client_code:
             target_accounts = [a for a in all_accs if a["client_code"] == str(target_client_code).upper().strip()]
         elif target_account_id:
             target_accounts = [a for a in all_accs if a["id"] == int(target_account_id)]
-    elif strategy_tag and strategy_tag.strip().upper() not in ["GLOBAL", "ALL"]:
-        target_accounts = get_active_subscribers_for_strategy_tag(strategy_tag)
+    elif clean_strat_tag and clean_strat_tag not in ["GLOBAL", "ALL"]:
+        target_accounts = get_active_subscribers_for_strategy_tag(clean_strat_tag)
         if not target_accounts:
-            logger.info(f"[Copy Trading] No active clients subscribed to strategy tag '{strategy_tag}'")
+            now_time = datetime.now().strftime("%H:%M:%S")
+            logger.info(f"[Copy Trading] Strategy '{clean_strat_tag}' received signal for {resolved_symbol}. 0 active clients subscribed yet.")
+            _PLAIN_ENGLISH_FEED.appendleft({
+                "timestamp": now_time,
+                "type": "warning",
+                "action": order_data.get("action", "BUY").upper(),
+                "symbol": resolved_symbol,
+                "strategy": clean_strat_tag,
+                "total_clients": 0,
+                "successful": 0,
+                "failed": 0,
+                "latency_ms": 0.0,
+                "text": f"🔔 Signal received for [{clean_strat_tag}] on {resolved_symbol}. No clients subscribed yet - assign clients in Strategy Hub.",
+            })
             return {
                 "status": "success",
-                "message": f"No active clients subscribed to strategy '{strategy_tag}'",
+                "message": f"Strategy '{clean_strat_tag}' is registered, but 0 active clients are subscribed yet. Assign clients in dashboard.",
                 "results": [],
                 "total_accounts": 0,
                 "successful_orders": 0,
@@ -559,15 +745,15 @@ def broadcast_copy_order(
         }
 
     logger.info(
-        f"[Copy Trading] Broadcasting {order_data.get('action')} {order_data.get('quantity')} {order_data.get('symbol')} "
-        f"[Strategy: {strategy_tag or 'GLOBAL'}] to {len(target_accounts)} accounts..."
+        f"[Copy Trading] Broadcasting {order_data.get('action')} {order_data.get('quantity')} {resolved_symbol} "
+        f"[Strategy: {clean_strat_tag or 'GLOBAL'}] to {len(target_accounts)} accounts..."
     )
 
     results = []
     successful = 0
     failed = 0
 
-    # 4. Parallel Dispatch with 50 Worker Pool
+    # 6. Parallel Dispatch with 50 Worker Pool
     max_workers = min(50, len(target_accounts))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_acc = {
@@ -583,25 +769,41 @@ def broadcast_copy_order(
                 failed += 1
 
     total_latency_ms = (time.time() - t0) * 1000
-    strat_label = f"Strategy: {strategy_tag}" if strategy_tag else "Global"
+    strat_label = f"Strategy: {clean_strat_tag}" if clean_strat_tag else "Global"
 
-    # 5. Push to Plain-English Feed
+    # 7. Push to Plain-English Feed
     now_time = datetime.now().strftime("%H:%M:%S")
     feed_entry = {
         "timestamp": now_time,
         "type": "success" if successful > 0 else "error",
         "action": order_data.get("action", "BUY").upper(),
-        "symbol": order_data.get("symbol", ""),
-        "strategy": strategy_tag or "Global Broadcast",
+        "symbol": resolved_symbol,
+        "strategy": clean_strat_tag or "Global Broadcast",
         "total_clients": len(target_accounts),
         "successful": successful,
         "failed": failed,
         "latency_ms": round(total_latency_ms, 1),
-        "text": f"Replicated {order_data.get('action', 'BUY').upper()} {order_data.get('quantity')} {order_data.get('symbol')} to {len(target_accounts)} Clients on [{strat_label}] in {total_latency_ms:.1f}ms ({successful} Placed, {failed} Failed)",
+        "text": f"Replicated {order_data.get('action', 'BUY').upper()} {order_data.get('quantity')} {resolved_symbol} to {len(target_accounts)} Clients on [{strat_label}] in {total_latency_ms:.1f}ms ({successful} Placed, {failed} Failed)",
     }
     _PLAIN_ENGLISH_FEED.appendleft(feed_entry)
 
     logger.info(f"[Copy Trading] {feed_entry['text']}")
+
+    # 8. Asynchronously Dispatch Real-Time Telegram Alert
+    summary_for_telegram = {
+        "action": order_data.get("action", "BUY"),
+        "symbol": resolved_symbol,
+        "exchange": exchange,
+        "strategy": clean_strat_tag or "Global Broadcast",
+        "quantity": order_data.get("quantity", 1),
+        "product": order_data.get("product", "MIS"),
+        "pricetype": order_data.get("pricetype", "MARKET"),
+        "total_accounts": len(target_accounts),
+        "successful_orders": successful,
+        "failed_orders": failed,
+        "total_latency_ms": total_latency_ms,
+    }
+    send_telegram_trade_alert(summary_for_telegram)
 
     return {
         "status": "success",

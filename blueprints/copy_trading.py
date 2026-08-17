@@ -12,6 +12,7 @@ from flask import Blueprint, Response, jsonify, request, session
 from database.copy_trading_db import (
     add_child_account,
     assign_strategy_to_account,
+    bulk_assign_subscribers_to_strategy,
     create_strategy,
     delete_child_account,
     delete_client_strategy_mapping,
@@ -25,6 +26,7 @@ from database.copy_trading_db import (
     get_master_switch,
     get_premarket_readiness_summary,
     get_strategy_by_id,
+    get_strategy_subscribers_matrix,
     set_master_switch,
     toggle_child_account,
     toggle_client_strategy_mapping,
@@ -353,6 +355,57 @@ def remove_mapping(mapping_id: int):
     """Remove a strategy assignment from an account."""
     res = delete_client_strategy_mapping(mapping_id)
     return jsonify(res)
+
+
+@copy_trading_bp.route("/strategies/<int:strategy_id>/subscribers", methods=["GET"])
+def get_strategy_subscribers(strategy_id: int):
+    """Retrieve full matrix of all accounts and their subscription state for this strategy."""
+    matrix = get_strategy_subscribers_matrix(strategy_id)
+    return jsonify({"status": "success", "subscribers": matrix})
+
+
+@copy_trading_bp.route("/strategies/<int:strategy_id>/bulk-subscribers", methods=["POST"])
+def bulk_update_strategy_subscribers(strategy_id: int):
+    """Bulk update or assign clients subscribed to a strategy."""
+    data = request.get_json(force=True, silent=True) or {}
+    subscribers = data.get("subscribers", [])
+    replace_all = data.get("replace_all", False)
+
+    res = bulk_assign_subscribers_to_strategy(strategy_id, subscribers, replace_all=replace_all)
+    return jsonify(res)
+
+
+@copy_trading_bp.route("/telegram-test", methods=["POST"])
+def test_telegram_alert():
+    """Send a test message to verify Telegram bot setup."""
+    import os
+    import requests
+
+    data = request.get_json(force=True, silent=True) or {}
+    bot_token = data.get("bot_token") or os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = data.get("chat_id") or os.getenv("TELEGRAM_CHAT_ID")
+
+    if not bot_token or not chat_id:
+        return jsonify({"status": "error", "message": "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing"}), 400
+
+    try:
+        msg = (
+            "🤖 <b>OpenAlgo Copy-Trading Telegram Test</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ <b>Status:</b> Connected & Ready\n"
+            "⚡ <b>Engine:</b> Institutional Multi-Account Router\n"
+            "📈 <b>Broker:</b> AC Agarwal Symphony XTS\n"
+            f"🕒 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            "━━━━━━━━━━━━━━━━━━━━━"
+        )
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+        if resp.status_code == 200:
+            return jsonify({"status": "success", "message": "Test message sent to Telegram successfully!"})
+        else:
+            return jsonify({"status": "error", "message": f"Telegram API error: {resp.text}"}), resp.status_code
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # =====================================================================
