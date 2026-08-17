@@ -83,9 +83,9 @@ def is_duplicate_signal(order_data: Dict[str, Any]) -> bool:
         return False
 
 
-def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
+def get_or_refresh_child_token(account: Dict[str, Any], force_refresh: bool = False) -> Tuple[bool, Optional[str], Optional[str]]:
     """
-    Get active Symphony XTS session token for a child account, refreshing if needed.
+    Get active Symphony XTS session token for a child account, refreshing autonomously if needed.
     Returns (success, token, error_message).
     """
     account_id = account["id"]
@@ -97,20 +97,15 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
         return False, None, "Missing API Key or Secret"
 
     now = time.time()
-    with _TOKEN_LOCK:
-        if account_id in _TOKEN_CACHE:
-            cached = _TOKEN_CACHE[account_id]
-            if now - cached.get("timestamp", 0) < TOKEN_CACHE_TTL and cached.get("token"):
-                return True, cached["token"], None
-
-    # DB stored token
-    db_token = account.get("auth_token")
-    if db_token:
+    if not force_refresh:
         with _TOKEN_LOCK:
-            _TOKEN_CACHE[account_id] = {"token": db_token, "timestamp": now}
-        return True, db_token, None
+            if account_id in _TOKEN_CACHE:
+                cached = _TOKEN_CACHE[account_id]
+                # If cached within last 4 hours, reuse in-memory token
+                if now - cached.get("timestamp", 0) < TOKEN_CACHE_TTL and cached.get("token"):
+                    return True, cached["token"], None
 
-    # Login to AC Agarwal Symphony XTS Interactive API
+    # Autonomous Login to AC Agarwal Symphony XTS Interactive API
     login_url = f"{INTERACTIVE_URL}/user/session"
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -120,7 +115,7 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
     }
 
     try:
-        resp = requests.post(login_url, json=payload, headers=headers, timeout=5)
+        resp = requests.post(login_url, json=payload, headers=headers, timeout=6)
         data = resp.json()
         if resp.status_code == 200 and data.get("type") == "success":
             token = data.get("result", {}).get("token")
@@ -128,7 +123,7 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
                 with _TOKEN_LOCK:
                     _TOKEN_CACHE[account_id] = {"token": token, "timestamp": now}
                 update_account_status(account_id, "connected", auth_token=token)
-                logger.info(f"[Copy Trading] Authenticated child account {account['account_name']} ({client_code})")
+                logger.info(f"[Copy Trading] Auto-authenticated child account {account['account_name']} ({client_code})")
                 return True, token, None
 
         err_msg = data.get("description") or data.get("message") or f"HTTP {resp.status_code}"
@@ -136,7 +131,7 @@ def get_or_refresh_child_token(account: Dict[str, Any]) -> Tuple[bool, Optional[
         return False, None, err_msg
     except Exception as e:
         err_msg = str(e)
-        logger.error(f"[Copy Trading] Login exception for {account['account_name']}: {err_msg}")
+        logger.error(f"[Copy Trading] Auto-login exception for {account['account_name']}: {err_msg}")
         update_account_status(account_id, "error", error_message=err_msg)
         return False, None, err_msg
 
@@ -546,9 +541,20 @@ def execute_order_for_single_account(
 
         try:
             resp, resp_data, child_order_id = place_order_api(child_order_payload, auth=token)
+            status_code = getattr(resp, "status_code", getattr(resp, "status", 500))
+
+            # Auto-Recovery: If token expired or 401 unauthorized, re-authenticate immediately and retry order
+            if status_code == 401 or "token" in str(resp_data).lower() or "session" in str(resp_data).lower():
+                logger.warning(f"[Copy Trading] Token expired for {account_name} during order placement. Re-authenticating on the fly...")
+                re_ok, new_token, _ = get_or_refresh_child_token(account, force_refresh=True)
+                if re_ok and new_token:
+                    token = new_token
+                    resp, resp_data, child_order_id = place_order_api(child_order_payload, auth=new_token)
+                    status_code = getattr(resp, "status_code", getattr(resp, "status", 500))
+
             latency_ms = (time.time() - start_time) * 1000
 
-            if getattr(resp, "status_code", getattr(resp, "status", 500)) == 200 and resp_data.get("type") == "success":
+            if status_code == 200 and resp_data.get("type") == "success":
                 placed_orders.append(str(child_order_id))
                 record_copy_order(
                     account_id=account_id,
